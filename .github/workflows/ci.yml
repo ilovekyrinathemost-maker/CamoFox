@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-lint:
+    name: Python Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Compile-check Python files
+        run: |
+          echo "=== Checking camofox-ios/ ==="
+          find camofox-ios/ -name '*.py' -print0 | xargs -0 -I{} python -m py_compile {}
+          echo "=== Checking lib/ ==="
+          find lib/ -name '*.py' -print0 | xargs -0 -I{} python -m py_compile {}
+          echo "=== Checking socks5.py ==="
+          python -m py_compile socks5.py
+          echo "All Python files passed syntax check."
+
+  shell-lint:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: |
+          echo "=== Running shellcheck on camofox-router/ ==="
+          find camofox-router/ -name '*.sh' -print0 | xargs -0 shellcheck --shell=sh --severity=warning
+          echo "=== Checking camofox CLI script ==="
+          shellcheck --shell=sh --severity=warning camofox-router/files/usr/bin/camofox
+          echo "=== Checking init.d script ==="
+          shellcheck --shell=sh --severity=warning camofox-router/files/etc/init.d/camofox
+          echo "=== Checking hotplug script ==="
+          shellcheck --shell=sh --severity=warning camofox-router/files/etc/hotplug.d/iface/99-camofox
+          echo "=== Checking health check script ==="
+          shellcheck --shell=sh --severity=warning camofox-router/files/etc/camofox/health_check.sh
+          echo "All shell scripts passed shellcheck."
+
+  markdown-check:
+    name: Markdown Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify markdown files exist and are non-empty
+        run: |
+          status=0
+          for f in \
+            CAMOFOX_README.md \
+            README.md \
+            CONTRIBUTING.md \
+            SECURITY.md \
+            CODE_OF_CONDUCT.md \
+            camofox-router/README.md \
+            camofox-ios/README.md \
+            camofox-ios/CONFIG.md \
+            docs/RESEARCH_SPEC.md; do
+            if [ ! -s "$f" ]; then
+              echo "FAIL: $f is missing or empty"
+              status=1
+            else
+              echo "OK:   $f"
+            fi
+          done
+          exit $status
+
+  file-structure:
+    name: Verify Project Structure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          status=0
+          required_files="
+            camofox-router/files/usr/bin/camofox
+            camofox-router/files/etc/init.d/camofox
+            camofox-router/files/etc/config/camofox
+            camofox-router/files/etc/camofox/redsocks.conf.template
+            camofox-router/files/etc/camofox/firewall.rules
+            camofox-router/files/etc/camofox/health_check.sh
+            camofox-router/files/etc/hotplug.d/iface/99-camofox
+            camofox-router/scripts/install.sh
+            camofox-router/scripts/setup-wizard.sh
+            camofox-router/scripts/uninstall.sh
+            camofox-router/Makefile
+            camofox-ios/camofox_start.py
+            camofox-ios/camofox_proxy.py
+            camofox-ios/camofox_status.py
+            camofox-ios/keepalive.py
+            camofox-ios/diagnostics.py
+            lib/__init__.py
+            lib/socks5_server.py
+            lib/proxy_server.py
+            lib/http_proxy_server.py
+            socks5.py
+          "
+          for f in $required_files; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              status=1
+            else
+              echo "OK:      $f"
+            fi
+          done
+          exit $status
