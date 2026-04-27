@@ -1,0 +1,286 @@
+#!/bin/sh /etc/rc.common
+# CamoFox Init Script
+# OpenWrt procd-based service management for CamoFox tethering bypass
+#
+# Manages: redsocks, firewall rules, health monitor, DNS-over-HTTPS
+# Configuration: /etc/config/camofox (UCI)
+
+START=99
+STOP=10
+USE_PROCD=1
+
+NAME="camofox"
+CONF_DIR="/etc/camofox"
+REDSOCKS_CONF="/tmp/camofox_redsocks.conf"
+REDSOCKS_TEMPLATE="$CONF_DIR/redsocks.conf.template"
+FW_SCRIPT="$CONF_DIR/firewall.rules"
+HEALTH_SCRIPT="$CONF_DIR/health_check.sh"
+HEALTH_PIDFILE="/var/run/camofox_health.pid"
+
+. /lib/functions.sh
+
+# ---------------------------------------------------------------------------
+# Load configuration from UCI
+# ---------------------------------------------------------------------------
+load_camofox_config() {
+    config_load camofox
+    config_get ENABLED       main enabled       '0'
+    config_get PROXY_IP      main proxy_ip      '172.20.10.1'
+    config_get PROXY_PORT    main proxy_port    '1080'
+    config_get PROXY_TYPE    main proxy_type    'socks5'
+    config_get REDSOCKS_PORT main redsocks_port '12345'
+    config_get TTL_ENABLED   main ttl_enabled   '1'
+    config_get KILL_SWITCH   main kill_switch   '1'
+    config_get DOH_ENABLED   main doh_enabled   '1'
+    config_get DOH_RESOLVER  main doh_resolver  'https://cloudflare-dns.com/dns-query'
+    config_get DOH_BOOTSTRAP main doh_bootstrap '1.1.1.1,8.8.8.8'
+    config_get DOH_PORT      main doh_listen_port '5053'
+    config_get LOG_LEVEL     main log_level     '1'
+}
+
+log_msg() {
+    logger -t camofox "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Generate redsocks config from template
+# ---------------------------------------------------------------------------
+generate_redsocks_conf() {
+    local proxy_type_redsocks
+
+    # Map our proxy_type to redsocks type names
+    case "$PROXY_TYPE" in
+        socks5)  proxy_type_redsocks="socks5" ;;
+        socks4)  proxy_type_redsocks="socks4" ;;
+        http)    proxy_type_redsocks="http-connect" ;;
+        *)       proxy_type_redsocks="socks5" ;;
+    esac
+
+    local log_debug="off"
+    [ "$LOG_LEVEL" -ge 2 ] && log_debug="on"
+
+    if [ -f "$REDSOCKS_TEMPLATE" ]; then
+        sed -e "s|{{REDSOCKS_PORT}}|$REDSOCKS_PORT|g" \
+            -e "s|{{PROXY_IP}}|$PROXY_IP|g" \
+            -e "s|{{PROXY_PORT}}|$PROXY_PORT|g" \
+            -e "s|{{PROXY_TYPE}}|$proxy_type_redsocks|g" \
+            -e "s|{{LOG_DEBUG}}|$log_debug|g" \
+            "$REDSOCKS_TEMPLATE" > "$REDSOCKS_CONF"
+        log_msg "Generated redsocks config: proxy=$PROXY_IP:$PROXY_PORT type=$proxy_type_redsocks"
+    else
+        # Fallback: generate config without template
+        cat > "$REDSOCKS_CONF" <<-EOF
+		base {
+		    log_debug = $log_debug;
+		    log_info = on;
+		    log = "syslog:daemon";
+		    daemon = on;
+		    redirector = iptables;
+		}
+
+		redsocks {
+		    local_ip = 127.0.0.1;
+		    local_port = $REDSOCKS_PORT;
+		    ip = $PROXY_IP;
+		    port = $PROXY_PORT;
+		    type = $proxy_type_redsocks;
+		}
+		EOF
+        log_msg "Generated redsocks config from fallback (template not found)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Configure DNS-over-HTTPS (https-dns-proxy)
+# ---------------------------------------------------------------------------
+configure_doh() {
+    if [ "$DOH_ENABLED" != "1" ]; then
+        log_msg "DoH disabled, skipping DNS configuration"
+        return
+    fi
+
+    # Check if https-dns-proxy is installed
+    if ! command -v https-dns-proxy >/dev/null 2>&1; then
+        log_msg "WARNING: https-dns-proxy not installed, DNS leak prevention limited"
+        return
+    fi
+
+    # Configure https-dns-proxy via UCI
+    uci -q batch <<-EOF
+		set https-dns-proxy.@https-dns-proxy[0]=https-dns-proxy
+		set https-dns-proxy.@https-dns-proxy[0].bootstrap_dns='$DOH_BOOTSTRAP'
+		set https-dns-proxy.@https-dns-proxy[0].resolver_url='$DOH_RESOLVER'
+		set https-dns-proxy.@https-dns-proxy[0].listen_addr='127.0.0.1'
+		set https-dns-proxy.@https-dns-proxy[0].listen_port='$DOH_PORT'
+		commit https-dns-proxy
+	EOF
+
+    # Configure dnsmasq to forward to https-dns-proxy
+    local current_servers
+    current_servers=$(uci -q get dhcp.@dnsmasq[0].server)
+    if ! echo "$current_servers" | grep -q "127.0.0.1#${DOH_PORT}"; then
+        uci -q delete dhcp.@dnsmasq[0].server
+        uci add_list dhcp.@dnsmasq[0].server="127.0.0.1#${DOH_PORT}"
+        uci set dhcp.@dnsmasq[0].noresolv='1'
+        uci commit dhcp
+    fi
+
+    # Restart DNS services
+    /etc/init.d/https-dns-proxy restart 2>/dev/null
+    /etc/init.d/dnsmasq restart 2>/dev/null
+
+    log_msg "DNS-over-HTTPS configured (resolver=$DOH_RESOLVER port=$DOH_PORT)"
+}
+
+# ---------------------------------------------------------------------------
+# Start health monitor as background process
+# ---------------------------------------------------------------------------
+start_health_monitor() {
+    if [ -x "$HEALTH_SCRIPT" ]; then
+        # Stop any existing monitor first
+        "$HEALTH_SCRIPT" stop 2>/dev/null
+        # Start in background
+        "$HEALTH_SCRIPT" start &
+        log_msg "Health monitor started"
+    else
+        log_msg "WARNING: Health monitor script not found or not executable"
+    fi
+}
+
+stop_health_monitor() {
+    if [ -x "$HEALTH_SCRIPT" ]; then
+        "$HEALTH_SCRIPT" stop 2>/dev/null
+    fi
+    # Belt and suspenders: kill by PID file
+    if [ -f "$HEALTH_PIDFILE" ]; then
+        kill "$(cat $HEALTH_PIDFILE)" 2>/dev/null
+        rm -f "$HEALTH_PIDFILE"
+    fi
+    rm -f /tmp/camofox_proxy_state
+}
+
+# ---------------------------------------------------------------------------
+# Procd service definition
+# ---------------------------------------------------------------------------
+start_service() {
+    load_camofox_config
+
+    if [ "$ENABLED" != "1" ]; then
+        log_msg "CamoFox is disabled (enabled=0), not starting"
+        return 0
+    fi
+
+    log_msg "===== Starting CamoFox ====="
+    log_msg "Proxy: $PROXY_IP:$PROXY_PORT ($PROXY_TYPE)"
+
+    # Step 1: Generate redsocks configuration
+    generate_redsocks_conf
+
+    # Step 2: Start redsocks via procd
+    procd_open_instance redsocks
+    procd_set_param command /usr/sbin/redsocks -c "$REDSOCKS_CONF"
+    procd_set_param respawn 3600 5 5
+    procd_set_param pidfile /var/run/redsocks.pid
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+
+    # Step 3: Wait for redsocks to start
+    sleep 1
+
+    # Step 4: Apply firewall rules
+    if [ -x "$FW_SCRIPT" ]; then
+        "$FW_SCRIPT" apply
+    else
+        log_msg "ERROR: Firewall script not found at $FW_SCRIPT"
+    fi
+
+    # Step 5: Configure DNS-over-HTTPS
+    configure_doh
+
+    # Step 6: Start health monitor
+    start_health_monitor
+
+    log_msg "===== CamoFox started successfully ====="
+}
+
+stop_service() {
+    load_camofox_config
+
+    log_msg "===== Stopping CamoFox ====="
+
+    # Stop health monitor first
+    stop_health_monitor
+
+    # Remove firewall rules
+    if [ -x "$FW_SCRIPT" ]; then
+        "$FW_SCRIPT" remove
+    fi
+
+    # redsocks is stopped automatically by procd
+
+    # Clean up generated config
+    rm -f "$REDSOCKS_CONF"
+
+    log_msg "===== CamoFox stopped ====="
+}
+
+service_triggers() {
+    procd_add_reload_trigger "camofox"
+}
+
+reload_service() {
+    log_msg "Reloading CamoFox configuration"
+    stop
+    start
+}
+
+# ---------------------------------------------------------------------------
+# Extra commands for status display
+# ---------------------------------------------------------------------------
+EXTRA_COMMANDS="status"
+EXTRA_HELP="        status  Show CamoFox service status"
+
+status() {
+    load_camofox_config
+
+    echo "=== CamoFox Service Status ==="
+    echo ""
+    echo "  Enabled: $([ "$ENABLED" = '1' ] && echo 'YES' || echo 'NO')"
+    echo "  Proxy: $PROXY_IP:$PROXY_PORT ($PROXY_TYPE)"
+    echo "  TTL mangling: $([ "$TTL_ENABLED" = '1' ] && echo 'enabled' || echo 'disabled')"
+    echo "  Kill switch: $([ "$KILL_SWITCH" = '1' ] && echo 'enabled' || echo 'disabled')"
+    echo "  DoH: $([ "$DOH_ENABLED" = '1' ] && echo 'enabled' || echo 'disabled')"
+    echo ""
+
+    # Check redsocks
+    if pidof redsocks >/dev/null 2>&1; then
+        echo "  redsocks: running (PID $(pidof redsocks))"
+    else
+        echo "  redsocks: NOT running"
+    fi
+
+    # Check health monitor
+    if [ -f "$HEALTH_PIDFILE" ] && kill -0 "$(cat $HEALTH_PIDFILE)" 2>/dev/null; then
+        echo "  Health monitor: running (PID $(cat $HEALTH_PIDFILE))"
+        echo "  Proxy state: $(cat /tmp/camofox_proxy_state 2>/dev/null || echo 'unknown')"
+    else
+        echo "  Health monitor: NOT running"
+    fi
+
+    # Check https-dns-proxy
+    if [ "$DOH_ENABLED" = "1" ]; then
+        if pidof https-dns-proxy >/dev/null 2>&1; then
+            echo "  https-dns-proxy: running"
+        else
+            echo "  https-dns-proxy: NOT running"
+        fi
+    fi
+
+    echo ""
+
+    # Show firewall status
+    if [ -x "$FW_SCRIPT" ]; then
+        "$FW_SCRIPT" status
+    fi
+}

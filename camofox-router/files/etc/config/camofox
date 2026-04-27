@@ -1,0 +1,76 @@
+# CamoFox Router Plugin - UCI Configuration
+# Transparent SOCKS5 proxy tunneling for tethering bypass
+#
+# This file controls all CamoFox behavior. Edit with:
+#   uci set camofox.main.<option>=<value>
+#   uci commit camofox
+#   /etc/init.d/camofox restart
+
+config camofox 'main'
+	# Master enable/disable switch
+	option enabled '1'
+
+	# --- Proxy Settings ---
+	# IP address of the iPhone running SOCKS5 proxy
+	# USB tethering default: 172.20.10.1
+	# WiFi hotspot default: 172.20.10.1
+	option proxy_ip '172.20.10.1'
+
+	# SOCKS5 proxy port (iOS-SOCKS-Server default: 1080)
+	option proxy_port '1080'
+
+	# HTTP proxy port (iOS-SOCKS-Server default: 1081)
+	option http_proxy_port '1081'
+
+	# Proxy type: socks5 or http
+	option proxy_type 'socks5'
+
+	# --- Connection Mode ---
+	# How the router connects to the iPhone: 'wifi' or 'usb'
+	option connection_mode 'usb'
+
+	# Auto-detect iPhone IP address when interface comes up
+	option auto_detect '1'
+
+	# --- TTL / Hop Limit (Defense in Depth) ---
+	# TTL value to set on all outbound packets
+	# 65 so after iPhone decrements it becomes 64 (normal iOS TTL)
+	option ttl_value '65'
+
+	# Enable TTL mangling
+	option ttl_enabled '1'
+
+	# --- Kill Switch ---
+	# Block all internet traffic if SOCKS proxy is unreachable
+	option kill_switch '1'
+
+	# --- DNS Settings ---
+	# Enable DNS-over-HTTPS to prevent DNS leaks
+	option doh_enabled '1'
+
+	# DoH resolver URL
+	option doh_resolver 'https://cloudflare-dns.com/dns-query'
+
+	# DoH bootstrap DNS (used to resolve DoH server initially)
+	option doh_bootstrap '1.1.1.1,8.8.8.8'
+
+	# Local DoH listen port
+	option doh_listen_port '5053'
+
+	# --- Health Monitor ---
+	# Interval in seconds between health checks
+	option health_interval '30'
+
+	# Number of consecutive failures before triggering kill switch
+	option health_fail_threshold '3'
+
+	# --- Redsocks ---
+	# Local port for redsocks transparent proxy
+	option redsocks_port '12345'
+
+	# --- Advanced ---
+	# LAN interface name (traffic from this interface is redirected)
+	option lan_iface 'br-lan'
+
+	# Log level: 0=quiet, 1=normal, 2=verbose
+	option log_level '1'
