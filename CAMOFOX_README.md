@@ -1,5 +1,9 @@
 # 🦊 CamoFox — Hide iPhone Tethering from T-Mobile
 
+[![CI](https://github.com/ilovekyrinathemost-maker/CamoFox/actions/workflows/ci.yml/badge.svg)](https://github.com/ilovekyrinathemost-maker/CamoFox/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+
 > **Tunnel your internet through your iPhone without T-Mobile ever knowing.**
 
 CamoFox is a two-part system that makes your iPhone's cellular data available to all your devices through a GL-iNet Opal travel router — while making all traffic appear as normal on-device phone usage.
@@ -193,7 +197,29 @@ camofox logs       # View logs
 
 ## 📄 License
 
-Based on [iOS-SOCKS-Server](https://github.com/nneonneo/iOS-SOCKS-Server) by @nneonneo.
+This project is licensed under the [MIT License](LICENSE).
+
+Originally based on [iOS-SOCKS-Server](https://github.com/nneonneo/iOS-SOCKS-Server) by @nneonneo.
+
+Copyright (c) 2026 My LiLPWNY
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md) before submitting a PR.
+
+- 🐛 [Report a Bug](https://github.com/ilovekyrinathemost-maker/CamoFox/issues/new?template=bug_report.md)
+- ✨ [Request a Feature](https://github.com/ilovekyrinathemost-maker/CamoFox/issues/new?template=feature_request.md)
+- ⚠️ [Report a Detection Change](https://github.com/ilovekyrinathemost-maker/CamoFox/issues/new?template=detection_report.md)
+
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+---
+
+## 🔒 Security
+
+If you discover a security vulnerability, please follow our [Security Policy](SECURITY.md). **Do not** open a public issue for security vulnerabilities.
 
 ---
 
