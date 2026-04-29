@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  CamoFox Mac — LaunchAgent
+
+  Starts CamoFox Mac automatically when the user logs in.
+  Runs the health monitor in the background and keeps the
+  proxy configuration active.
+
+  Install:
+    cp com.camofox.mac.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.camofox.mac.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.camofox.mac.plist
+    rm ~/Library/LaunchAgents/com.camofox.mac.plist
+-->
+<dict>
+    <!-- Label: unique identifier for this agent -->
+    <key>Label</key>
+    <string>com.camofox.mac</string>
+
+    <!-- Program: the CamoFox start command -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/camofox-mac</string>
+        <string>start</string>
+    </array>
+
+    <!-- Run at load (login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep alive: restart if it exits -->
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Only keep alive if the process crashes (non-zero exit) -->
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Restart throttle: wait 30 seconds between restarts -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/usr/local/share/camofox-mac</string>
+
+    <!-- Log output -->
+    <key>StandardOutPath</key>
+    <string>/tmp/camofox-mac.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/camofox-mac.stderr.log</string>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/REPLACE_WITH_USERNAME</string>
+    </dict>
+
+    <!-- Nice level: slightly lower priority -->
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <!-- Process type: background -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

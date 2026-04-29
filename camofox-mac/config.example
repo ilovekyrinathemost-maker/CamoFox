@@ -1,0 +1,110 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# CamoFox Mac — Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+# Copy this file to ~/.camofox/config and edit to taste.
+#
+# Lines starting with # are comments. Blank lines are ignored.
+# Values are KEY=value pairs (no spaces around =).
+
+# ---------------------------------------------------------------------------
+# Proxy Connection
+# ---------------------------------------------------------------------------
+
+# iPhone IP address. Set to "auto" to scan the local network.
+PROXY_IP=auto
+
+# SOCKS5 proxy port on the iPhone (CamoFox iOS default: 9876)
+SOCKS_PORT=9876
+
+# HTTP proxy port on the iPhone (CamoFox iOS default: 9877)
+HTTP_PORT=9877
+
+# ---------------------------------------------------------------------------
+# Operation Mode
+# ---------------------------------------------------------------------------
+
+# "simple"  — Sets macOS system proxy (works for most apps)
+# "force"   — Uses pfctl + transparent proxy to catch ALL traffic
+MODE=simple
+
+# ---------------------------------------------------------------------------
+# DNS Leak Prevention
+# ---------------------------------------------------------------------------
+
+# "doh"     — DNS-over-HTTPS via dnscrypt-proxy or cloudflared
+# "proxy"   — Route DNS through the SOCKS proxy (requires force mode)
+# "system"  — Leave macOS DNS settings unchanged (not recommended)
+DNS_MODE=doh
+
+# DoH upstream resolver URL (used when DNS_MODE=doh)
+DOH_SERVER=https://cloudflare-dns.com/dns-query
+
+# Fallback DNS servers (comma-separated, used when DoH is unavailable)
+FALLBACK_DNS=1.1.1.1,1.0.0.1
+
+# ---------------------------------------------------------------------------
+# Kill Switch
+# ---------------------------------------------------------------------------
+
+# Block ALL internet traffic if the SOCKS proxy becomes unreachable.
+# Prevents accidental unproxied leaks.  true / false
+KILL_SWITCH=true
+
+# ---------------------------------------------------------------------------
+# Auto-Discovery
+# ---------------------------------------------------------------------------
+
+# Scan the local network for an iPhone running CamoFox proxy.
+# Disable and set PROXY_IP manually if the scan is too slow.  true / false
+AUTO_DISCOVER=true
+
+# Timeout in seconds for each host probe during discovery.
+DISCOVER_TIMEOUT=1
+
+# ---------------------------------------------------------------------------
+# Health Monitor
+# ---------------------------------------------------------------------------
+
+# Interval in seconds between health-check pings to the proxy.
+HEALTH_INTERVAL=30
+
+# ---------------------------------------------------------------------------
+# macOS Network
+# ---------------------------------------------------------------------------
+
+# macOS network service name (run: networksetup -listallnetworkservices)
+NETWORK_SERVICE=Wi-Fi
+
+# ---------------------------------------------------------------------------
+# Force Mode — Transparent Proxy
+# ---------------------------------------------------------------------------
+
+# Local port for the transparent proxy helper (proxy_helper.py).
+LOCAL_PROXY_PORT=12345
+
+# Network interface for pfctl rules (usually en0 for Wi-Fi).
+PF_INTERFACE=en0
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+# Log file location.
+LOG_FILE=$HOME/.camofox/camofox.log
+
+# Log level: debug, info, warn, error
+LOG_LEVEL=info
+
+# ---------------------------------------------------------------------------
+# Advanced
+# ---------------------------------------------------------------------------
+
+# Bypass proxy for these CIDR ranges (comma-separated).
+# Local/private networks are always bypassed.
+BYPASS_RANGES=
+
+# Extra domains to bypass (comma-separated, e.g. for captive portals).
+BYPASS_DOMAINS=
+
+# PAC/WPAD URL on the iPhone (for reference / auto-config).
+WPAD_URL=http://auto:8088/wpad.dat
