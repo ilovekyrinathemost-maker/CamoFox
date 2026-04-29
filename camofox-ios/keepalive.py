@@ -1,24 +1,29 @@
 #!python3
-"""CamoFox Keepalive Helper — Prevent iOS from suspending Pythonista.
+"""CamoFox Keepalive Helper — Prevent iOS from suspending the proxy app.
 
-This module provides multiple strategies to keep Pythonista alive in the
-foreground on iOS.  Each approach has trade-offs; the KeepaliveManager
-class automatically selects the best available method.
+Cross-platform keepalive strategies that work across all supported iOS
+Python environments:
 
-Strategies (in order of effectiveness):
-  1. Idle-timer disable  — Prevents screen dimming / auto-lock.
-  2. Silent audio loop    — Plays inaudible audio to signal "active media".
-  3. Periodic self-ping   — Lightweight network activity on loopback.
-  4. Location services    — Requests GPS updates (high battery cost).
+  • a-Shell (FREE)    — Network activity + file I/O keepalive
+  • iSH (FREE)        — Network activity (iSH has great persistence)
+  • Pyto (FREE)       — Network activity + file I/O keepalive
+  • Pythonista ($9.99) — All strategies including audio + idle timer
+
+Strategies (in order of universality):
+  1. Periodic self-ping   — Loopback TCP activity (ALL platforms)
+  2. Network activity     — Small HTTP requests (ALL platforms)
+  3. File I/O activity    — Periodic disk writes (ALL platforms)
+  4. Idle-timer disable   — Prevents screen lock (Pythonista only)
+  5. Silent audio loop    — Keeps audio session active (Pythonista only)
+  6. Location services    — GPS updates keepalive (Pythonista only)
 
 Limitations:
-  • None of these prevent iOS from killing Pythonista when the user
+  • None of these prevent iOS from killing the app when the user
     explicitly swipes it away in the app switcher.
   • If iOS is under extreme memory pressure it *will* terminate
     background apps regardless.
-  • Silent audio only works when the device is not in Silent Mode on
-    some iOS versions.
-  • Location services requires user permission on first run.
+  • iSH with Location Services enabled has the best background
+    persistence of all iOS Python environments.
 
 Usage:
     from keepalive import KeepaliveManager
@@ -28,14 +33,36 @@ Usage:
     km.stop()    # call on clean shutdown
 """
 
+from __future__ import annotations
+
+import logging
+import os
+import socket
+import tempfile
 import threading
 import time
-import logging
 
 logger = logging.getLogger("camofox.keepalive")
 
 # ---------------------------------------------------------------------------
-# Feature detection — import Pythonista-only modules safely
+# Platform detection — import capabilities
+# ---------------------------------------------------------------------------
+try:
+    from platform_detect import PLATFORM, CAPABILITIES
+except ImportError:
+    try:
+        from camofox_ios.platform_detect import PLATFORM, CAPABILITIES  # type: ignore
+    except ImportError:
+        PLATFORM = 'generic'
+        CAPABILITIES = {
+            'objc_bridge': False, 'gui': False, 'terminal': True,
+            'background_audio': False, 'location': False, 'pip': False,
+            'ansi_colors': True, 'url_scheme': None,
+            'background_persist': 'good',
+        }
+
+# ---------------------------------------------------------------------------
+# Feature detection — import platform-specific modules safely
 # ---------------------------------------------------------------------------
 _HAS_CONSOLE = False
 _HAS_OBJC = False
@@ -68,100 +95,21 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 1: Disable idle timer (screen-off prevention)
-# ---------------------------------------------------------------------------
-def disable_idle_timer() -> bool:
-    """Prevent iOS from dimming / locking the screen.
-
-    Uses ``console.set_idle_timer_disabled(True)`` dispatched on the
-    main thread via ``objc_util.on_main_thread``.
-
-    Returns True if successfully applied.
-    """
-    if _HAS_CONSOLE and _HAS_OBJC:
-        try:
-            on_main_thread(console.set_idle_timer_disabled)(True)
-            logger.info("Idle timer disabled — screen will stay on")
-            return True
-        except Exception as exc:
-            logger.warning("Failed to disable idle timer: %s", exc)
-    return False
-
-
-def enable_idle_timer() -> None:
-    """Re-enable idle timer on shutdown."""
-    if _HAS_CONSOLE and _HAS_OBJC:
-        try:
-            on_main_thread(console.set_idle_timer_disabled)(False)
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# Strategy 2: Silent audio loop
-# ---------------------------------------------------------------------------
-class SilentAudioLoop:
-    """Play a short silent WAV in a loop to keep the audio session active.
-
-    iOS treats apps with an active audio session as higher priority and is
-    less likely to suspend them.  We generate a 1-second silent WAV in
-    memory and replay it every few seconds.
-
-    NOTE: This works best when the device is *not* in Silent Mode.
-    """
-
-    def __init__(self, interval: float = 10.0):
-        self._interval = interval
-        self._thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
-        self._available = _HAS_SOUND
-
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    def start(self) -> bool:
-        if not self._available:
-            return False
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._loop, name="keepalive-audio", daemon=True
-        )
-        self._thread.start()
-        logger.info("Silent audio keepalive started (interval=%ss)", self._interval)
-        return True
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
-
-    def _loop(self) -> None:
-        """Background loop that plays a near-silent beep."""
-        while not self._stop_event.is_set():
-            try:
-                # Pythonista's sound module can play built-in effects.
-                # 'ui:click1' is a very short, quiet system sound.
-                # We set volume to minimum to be effectively inaudible.
-                sound.play_effect("ui:click1", volume=0.01)
-            except Exception:
-                pass
-            self._stop_event.wait(self._interval)
-
-
-# ---------------------------------------------------------------------------
-# Strategy 3: Periodic self-ping (loopback TCP)
+# Strategy 1: Periodic self-ping (loopback TCP) — ALL PLATFORMS
 # ---------------------------------------------------------------------------
 class SelfPingLoop:
     """Periodically connect to localhost to create network activity.
 
-    This is the most lightweight strategy and works on all platforms.
-    It generates minimal CPU / battery load.
+    This is the most lightweight strategy and works on ALL platforms.
+    It generates minimal CPU / battery load.  Connects to the proxy's
+    own SOCKS port (or gets a connection-refused — either counts as
+    network activity for iOS).
     """
 
-    def __init__(self, interval: float = 30.0):
+    def __init__(self, interval: float = 30.0, target_port: int = 9876):
         self._interval = interval
-        self._thread: threading.Thread | None = None
+        self._target_port = target_port
+        self._thread = None  # type: threading.Thread | None
         self._stop_event = threading.Event()
 
     def start(self) -> bool:
@@ -178,17 +126,17 @@ class SelfPingLoop:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
 
+    @property
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def _loop(self) -> None:
-        import socket
         while not self._stop_event.is_set():
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(2)
-                # Connect to a likely-open port (our own proxy) or just
-                # attempt a connection that will be refused — either way
-                # it counts as network activity.
                 try:
-                    sock.connect(("127.0.0.1", 9876))
+                    sock.connect(("127.0.0.1", self._target_port))
                 except (ConnectionRefusedError, OSError):
                     pass
                 finally:
@@ -199,18 +147,224 @@ class SelfPingLoop:
 
 
 # ---------------------------------------------------------------------------
-# Strategy 4: Location services keepalive
+# Strategy 2: Network activity (HTTP requests) — ALL PLATFORMS
+# ---------------------------------------------------------------------------
+class NetworkActivityLoop:
+    """Periodic small HTTP requests to generate network activity.
+
+    Works on ALL platforms.  Makes tiny HEAD requests to well-known
+    endpoints.  iOS considers apps with active network connections
+    as higher priority.  Uses only standard library (no requests needed).
+    """
+
+    def __init__(self, interval: float = 45.0):
+        self._interval = interval
+        self._thread = None  # type: threading.Thread | None
+        self._stop_event = threading.Event()
+        # Lightweight endpoints that return fast HEAD responses
+        self._endpoints = [
+            ("1.1.1.1", 80),
+            ("8.8.8.8", 53),
+            ("1.0.0.1", 80),
+        ]
+        self._endpoint_idx = 0
+
+    def start(self) -> bool:
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name="keepalive-net", daemon=True
+        )
+        self._thread.start()
+        logger.info("Network activity keepalive started (interval=%ss)", self._interval)
+        return True
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    @property
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                host, port = self._endpoints[self._endpoint_idx % len(self._endpoints)]
+                self._endpoint_idx += 1
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                try:
+                    sock.connect((host, port))
+                    # Send a tiny HTTP HEAD request if port 80
+                    if port == 80:
+                        sock.sendall(b"HEAD / HTTP/1.0\r\nHost: detect\r\n\r\n")
+                        sock.recv(64)  # Read a bit of response
+                except (ConnectionRefusedError, OSError, socket.timeout):
+                    pass
+                finally:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            self._stop_event.wait(self._interval)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 3: File I/O activity — ALL PLATFORMS
+# ---------------------------------------------------------------------------
+class FileActivityLoop:
+    """Periodic file writes to maintain app activity.
+
+    Works on ALL platforms.  iOS monitors app activity; periodic
+    file system access helps signal that the app is still active.
+    Also serves as a heartbeat file that external tools can monitor.
+    """
+
+    def __init__(self, interval: float = 60.0, heartbeat_path: str = ""):
+        self._interval = interval
+        self._thread = None  # type: threading.Thread | None
+        self._stop_event = threading.Event()
+        # Default heartbeat file in the same directory as this script
+        if heartbeat_path:
+            self._heartbeat_path = heartbeat_path
+        else:
+            this_dir = os.path.dirname(os.path.abspath(__file__))
+            self._heartbeat_path = os.path.join(this_dir, ".camofox_heartbeat")
+
+    def start(self) -> bool:
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name="keepalive-file", daemon=True
+        )
+        self._thread.start()
+        logger.info("File activity keepalive started (interval=%ss)", self._interval)
+        return True
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        # Clean up heartbeat file
+        try:
+            if os.path.exists(self._heartbeat_path):
+                os.remove(self._heartbeat_path)
+        except Exception:
+            pass
+
+    @property
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                # Write a heartbeat file with timestamp
+                with open(self._heartbeat_path, 'w') as f:
+                    f.write(f"camofox-alive:{time.time():.0f}\n")
+            except Exception:
+                pass
+            self._stop_event.wait(self._interval)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 4: Disable idle timer (Pythonista ONLY)
+# ---------------------------------------------------------------------------
+def disable_idle_timer() -> bool:
+    """Prevent iOS from dimming / locking the screen.
+
+    Uses ``console.set_idle_timer_disabled(True)`` dispatched on the
+    main thread via ``objc_util.on_main_thread``.
+
+    Returns True if successfully applied.  Only works in Pythonista.
+    """
+    if _HAS_CONSOLE and _HAS_OBJC:
+        try:
+            on_main_thread(console.set_idle_timer_disabled)(True)
+            logger.info("Idle timer disabled — screen will stay on (Pythonista)")
+            return True
+        except Exception as exc:
+            logger.warning("Failed to disable idle timer: %s", exc)
+    return False
+
+
+def enable_idle_timer() -> None:
+    """Re-enable idle timer on shutdown."""
+    if _HAS_CONSOLE and _HAS_OBJC:
+        try:
+            on_main_thread(console.set_idle_timer_disabled)(False)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Strategy 5: Silent audio loop (Pythonista ONLY)
+# ---------------------------------------------------------------------------
+class SilentAudioLoop:
+    """Play a short silent WAV in a loop to keep the audio session active.
+
+    iOS treats apps with an active audio session as higher priority and is
+    less likely to suspend them.  Only works in Pythonista which provides
+    the ``sound`` module.
+
+    NOTE: This works best when the device is *not* in Silent Mode.
+    """
+
+    def __init__(self, interval: float = 10.0):
+        self._interval = interval
+        self._thread = None  # type: threading.Thread | None
+        self._stop_event = threading.Event()
+        self._available = _HAS_SOUND
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def start(self) -> bool:
+        if not self._available:
+            return False
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name="keepalive-audio", daemon=True
+        )
+        self._thread.start()
+        logger.info("Silent audio keepalive started (interval=%ss, Pythonista)", self._interval)
+        return True
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    @property
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def _loop(self) -> None:
+        """Background loop that plays a near-silent beep."""
+        while not self._stop_event.is_set():
+            try:
+                sound.play_effect("ui:click1", volume=0.01)
+            except Exception:
+                pass
+            self._stop_event.wait(self._interval)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 6: Location services keepalive (Pythonista ONLY)
 # ---------------------------------------------------------------------------
 class LocationKeepalive:
     """Request low-accuracy location updates to keep the app alive.
 
     iOS grants apps that are actively using location services additional
-    background execution time.  We request "significant change" updates
-    which use minimal battery.
+    background execution time.  Only works in Pythonista.
 
-    WARNING: This requires the user to grant location permission when
-    prompted.  It also shows the location indicator in the status bar.
-    Use only as a last resort.
+    For iSH: Enable Location Services in iOS Settings → iSH → Location
+    instead — iSH handles this natively without Python code.
+
+    WARNING: Shows the location indicator in the status bar.
     """
 
     def __init__(self):
@@ -227,7 +381,7 @@ class LocationKeepalive:
         try:
             location.start_updates()
             self._active = True
-            logger.info("Location keepalive started (shows location icon)")
+            logger.info("Location keepalive started (Pythonista, shows location icon)")
             return True
         except Exception as exc:
             logger.warning("Failed to start location keepalive: %s", exc)
@@ -241,38 +395,64 @@ class LocationKeepalive:
                 pass
             self._active = False
 
+    @property
+    def is_alive(self) -> bool:
+        return self._active
+
 
 # ---------------------------------------------------------------------------
-# Combined KeepaliveManager
+# Combined KeepaliveManager — Auto-selects strategies per platform
 # ---------------------------------------------------------------------------
 class KeepaliveManager:
-    """Orchestrate multiple keepalive strategies.
+    """Orchestrate multiple keepalive strategies based on detected platform.
 
-    By default enables:
-      - Idle timer disable (always)
-      - Self-ping (always)
-      - Silent audio (if available, optional)
-      - Location (disabled by default — high battery cost)
+    Automatically selects the best strategies for the current environment:
+
+    ALL PLATFORMS (always enabled):
+      - Self-ping (loopback TCP to proxy port)
+      - Network activity (small HTTP connections)
+      - File I/O activity (heartbeat file)
+
+    PYTHONISTA ONLY (optional enhancements):
+      - Idle timer disable (prevents screen lock)
+      - Silent audio loop (keeps audio session)
+      - Location services (GPS keepalive — high battery)
 
     Args:
-        use_audio: Enable silent audio loop.  Default True.
-        use_location: Enable location keepalive.  Default False.
-        ping_interval: Seconds between self-pings.  Default 30.
-        audio_interval: Seconds between audio pings.  Default 10.
+        use_audio: Enable silent audio (Pythonista only). Default True.
+        use_location: Enable GPS keepalive (Pythonista only). Default False.
+        use_network: Enable network activity keepalive. Default True.
+        use_file_io: Enable file I/O keepalive. Default True.
+        ping_interval: Seconds between self-pings. Default 30.
+        audio_interval: Seconds between audio pings. Default 10.
+        network_interval: Seconds between HTTP pings. Default 45.
+        file_interval: Seconds between file writes. Default 60.
+        target_port: Port to self-ping (proxy port). Default 9876.
     """
 
     def __init__(
         self,
         use_audio: bool = True,
         use_location: bool = False,
+        use_network: bool = True,
+        use_file_io: bool = True,
         ping_interval: float = 30.0,
         audio_interval: float = 10.0,
+        network_interval: float = 45.0,
+        file_interval: float = 60.0,
+        target_port: int = 9876,
     ):
         self._idle_disabled = False
-        self._audio = SilentAudioLoop(interval=audio_interval) if use_audio else None
-        self._ping = SelfPingLoop(interval=ping_interval)
-        self._location = LocationKeepalive() if use_location else None
         self._started = False
+
+        # Universal strategies (all platforms)
+        self._ping = SelfPingLoop(interval=ping_interval, target_port=target_port)
+        self._network = NetworkActivityLoop(interval=network_interval) if use_network else None
+        self._file_io = FileActivityLoop(interval=file_interval) if use_file_io else None
+
+        # Pythonista-only strategies (gracefully no-op on other platforms)
+        self._audio = SilentAudioLoop(interval=audio_interval) if use_audio else None
+        self._location = LocationKeepalive() if use_location else None
 
     def start(self) -> dict:
         """Start all configured keepalive strategies.
@@ -284,20 +464,36 @@ class KeepaliveManager:
 
         results = {}
 
-        # Always try to disable idle timer
-        self._idle_disabled = disable_idle_timer()
-        results["idle_timer_disabled"] = self._idle_disabled
+        # --- Universal strategies (all platforms) ---
 
         # Always start self-ping
         results["self_ping"] = self._ping.start()
 
-        # Optional: silent audio
+        # Network activity keepalive
+        if self._network:
+            results["network_activity"] = self._network.start()
+        else:
+            results["network_activity"] = False
+
+        # File I/O keepalive
+        if self._file_io:
+            results["file_activity"] = self._file_io.start()
+        else:
+            results["file_activity"] = False
+
+        # --- Pythonista-only strategies ---
+
+        # Disable idle timer (Pythonista only — silent no-op elsewhere)
+        self._idle_disabled = disable_idle_timer()
+        results["idle_timer_disabled"] = self._idle_disabled
+
+        # Silent audio (Pythonista only)
         if self._audio and self._audio.available:
             results["silent_audio"] = self._audio.start()
         else:
             results["silent_audio"] = False
 
-        # Optional: location
+        # Location (Pythonista only)
         if self._location and self._location.available:
             results["location"] = self._location.start()
         else:
@@ -305,7 +501,11 @@ class KeepaliveManager:
 
         self._started = True
         active = [k for k, v in results.items() if v]
-        logger.info("Keepalive active strategies: %s", ", ".join(active) or "none")
+        logger.info(
+            "Keepalive active on %s: %s",
+            PLATFORM,
+            ", ".join(active) or "none",
+        )
         return results
 
     def stop(self) -> None:
@@ -314,6 +514,10 @@ class KeepaliveManager:
             return
 
         self._ping.stop()
+        if self._network:
+            self._network.stop()
+        if self._file_io:
+            self._file_io.stop()
         if self._audio:
             self._audio.stop()
         if self._location:
@@ -332,19 +536,15 @@ class KeepaliveManager:
         """Return current status of each strategy."""
         return {
             "running": self._started,
+            "platform": PLATFORM,
+            # Universal
+            "self_ping": self._ping.is_alive,
+            "network_activity": self._network.is_alive if self._network else False,
+            "file_activity": self._file_io.is_alive if self._file_io else False,
+            # Pythonista-only
             "idle_timer_disabled": self._idle_disabled,
-            "self_ping": self._ping._thread is not None
-            and self._ping._thread.is_alive()
-            if self._ping._thread
-            else False,
-            "silent_audio": (
-                self._audio._thread is not None and self._audio._thread.is_alive()
-                if self._audio and self._audio._thread
-                else False
-            ),
-            "location": (
-                self._location._active if self._location else False
-            ),
+            "silent_audio": self._audio.is_alive if self._audio else False,
+            "location": self._location.is_alive if self._location else False,
         }
 
 
@@ -353,11 +553,22 @@ class KeepaliveManager:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-    print("CamoFox Keepalive — Feature Detection")
+    print("🦊 CamoFox Keepalive — Feature Detection")
+    print(f"  Platform:        {PLATFORM}")
     print(f"  Console module:  {'YES' if _HAS_CONSOLE else 'NO'}")
     print(f"  ObjC utilities:  {'YES' if _HAS_OBJC else 'NO'}")
     print(f"  Sound module:    {'YES' if _HAS_SOUND else 'NO'}")
     print(f"  Location module: {'YES' if _HAS_LOCATION else 'NO'}")
+    print()
+
+    # Show which strategies will be active
+    print("  Strategies available:")
+    print(f"    Self-ping:         YES (all platforms)")
+    print(f"    Network activity:  YES (all platforms)")
+    print(f"    File I/O activity: YES (all platforms)")
+    print(f"    Idle timer:        {'YES' if _HAS_CONSOLE and _HAS_OBJC else 'NO (Pythonista only)'}")
+    print(f"    Silent audio:      {'YES' if _HAS_SOUND else 'NO (Pythonista only)'}")
+    print(f"    Location:          {'YES' if _HAS_LOCATION else 'NO (Pythonista only)'}")
     print()
 
     km = KeepaliveManager(use_audio=True, use_location=False)

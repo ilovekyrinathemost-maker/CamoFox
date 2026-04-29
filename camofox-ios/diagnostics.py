@@ -1,26 +1,29 @@
 #!python3
 """CamoFox Network Diagnostics — Verify iPhone proxy setup.
 
+Cross-platform diagnostic tool that works on all iOS Python environments:
+  - a-Shell (FREE)  - iSH (FREE)  - Pyto (FREE)  - Pythonista ($9.99)
+
 Runs a comprehensive battery of checks to confirm the iPhone is
 correctly configured to act as a SOCKS proxy for the GL-iNet Opal
-router.  Output is a formatted report suitable for copy-pasting
-into a support request or troubleshooting session.
+router.
 
 Checks performed:
-  1. WiFi connectivity & interface detection
-  2. List all network interfaces with addresses
-  3. DNS resolution (system + custom resolvers)
-  4. Proxy port availability (9876, 9877, 8088)
-  5. Loopback proxy test (connect to own SOCKS port)
-  6. Internet connectivity test (direct + via proxy)
-  7. Cellular interface detection
-  8. Pythonista environment check
+  1. Platform & environment detection
+  2. WiFi connectivity & interface detection
+  3. List all network interfaces with addresses
+  4. DNS resolution (system + custom resolvers)
+  5. Proxy port availability (9876, 9877, 8088)
+  6. Loopback proxy test (connect to own SOCKS port)
+  7. Internet connectivity test
+  8. Cellular interface detection
   9. Keepalive feature availability
+  10. Router reachability
 
 Usage::
 
-    python diagnostics.py          # run all checks
-    python diagnostics.py --json   # output as JSON
+    python3 diagnostics.py          # run all checks
+    python3 diagnostics.py --json   # output as JSON
 """
 
 from __future__ import annotations
@@ -28,7 +31,6 @@ from __future__ import annotations
 import json as json_mod
 import os
 import socket
-import struct
 import sys
 import time
 from typing import Optional
@@ -43,6 +45,19 @@ for _p in (_PROJECT_ROOT, _THIS_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+try:
+    from platform_detect import PLATFORM, CAPABILITIES, get_platform_info
+except ImportError:
+    try:
+        from camofox_ios.platform_detect import PLATFORM, CAPABILITIES, get_platform_info  # type: ignore
+    except ImportError:
+        PLATFORM = 'generic'
+        CAPABILITIES = {}
+        def get_platform_info(): return f"Platform: generic\nPython: {sys.version.split()[0]}"
+
 
 # ---------------------------------------------------------------------------
 # Check result container
@@ -51,31 +66,30 @@ for _p in (_PROJECT_ROOT, _THIS_DIR):
 class CheckResult:
     """Result of a single diagnostic check."""
 
-    def __init__(self, name: str, passed: bool, detail: str = "",
-                 warning: str = ""):
+    def __init__(self, name, passed, detail="", warning=""):
         self.name = name
         self.passed = passed
         self.detail = detail
         self.warning = warning
 
     @property
-    def status_icon(self) -> str:
+    def status_icon(self):
         if self.passed:
-            return "✅"
+            return "\033[32m\u2714\033[0m"  # green checkmark
         elif self.warning:
-            return "⚠️"
+            return "\033[33m\u26a0\033[0m"  # yellow warning
         else:
-            return "❌"
+            return "\033[31m\u2718\033[0m"  # red X
 
-    def __str__(self) -> str:
+    def __str__(self):
         line = f"{self.status_icon} {self.name}"
         if self.detail:
             line += f"\n     {self.detail}"
         if self.warning:
-            line += f"\n     ⚠️  {self.warning}"
+            line += f"\n     \033[33m\u26a0  {self.warning}\033[0m"
         return line
 
-    def to_dict(self) -> dict:
+    def to_dict(self):
         return {
             "name": self.name,
             "passed": self.passed,
@@ -88,20 +102,41 @@ class CheckResult:
 # Individual checks
 # ---------------------------------------------------------------------------
 
-def check_pythonista_env() -> CheckResult:
-    """Check if running inside Pythonista."""
-    is_pythonista = "Pythonista" in sys.executable
+def check_environment() -> CheckResult:
+    """Check platform and Python environment."""
     version = sys.version.split()[0]
-    detail = f"Python {version}"
-    if is_pythonista:
-        detail += " (Pythonista)"
-    else:
-        detail += " (not Pythonista — some iOS features unavailable)"
+    platform_names = {
+        'pythonista': 'Pythonista 3',
+        'ashell': 'a-Shell (FREE)',
+        'ish': 'iSH (FREE)',
+        'pyto': 'Pyto (FREE)',
+        'generic': 'Generic Python',
+    }
+    plat_name = platform_names.get(PLATFORM, PLATFORM)
+    detail = f"Python {version} on {plat_name}"
+
+    features = []
+    if CAPABILITIES.get('objc_bridge'):
+        features.append('ObjC bridge')
+    if CAPABILITIES.get('background_audio'):
+        features.append('audio keepalive')
+    if CAPABILITIES.get('location'):
+        features.append('GPS keepalive')
+    if CAPABILITIES.get('pip'):
+        features.append('pip')
+    if features:
+        detail += f"\n     Features: {', '.join(features)}"
+    detail += f"\n     Background persistence: {CAPABILITIES.get('background_persist', 'unknown')}"
+
+    warning = ""
+    if PLATFORM == 'generic':
+        warning = "Not running on a recognized iOS platform"
+
     return CheckResult(
-        "Pythonista Environment",
+        "Platform & Environment",
         passed=True,  # informational
         detail=detail,
-        warning="" if is_pythonista else "Not running in Pythonista — iOS keepalive features disabled",
+        warning=warning,
     )
 
 
@@ -130,11 +165,30 @@ def check_network_interfaces() -> CheckResult:
             detail="\n     ".join(iface_info),
         )
     except Exception as exc:
+        # ifaddrs uses ctypes — only works on iOS/macOS natively
+        # On iSH we can try ip/ifconfig instead
+        if PLATFORM == 'ish':
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['ip', 'addr', 'show'], capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    lines = [l.strip() for l in result.stdout.split('\n') if 'inet' in l]
+                    return CheckResult(
+                        "Network Interfaces",
+                        passed=True,
+                        detail="\n     ".join(lines[:10]) if lines else "No interfaces found",
+                        warning="Using ip command (iSH Linux mode)",
+                    )
+            except Exception:
+                pass
+
         return CheckResult(
             "Network Interfaces",
             passed=False,
             detail=f"ifaddrs not available: {exc}",
-            warning="Using ctypes — only works on iOS/macOS",
+            warning="Interface detection uses ctypes (iOS/macOS). On iSH try: ip addr show",
         )
 
 
@@ -157,7 +211,7 @@ def check_wifi_connectivity() -> CheckResult:
     except Exception:
         pass
 
-    # Fallback
+    # Fallback — works on all platforms
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -199,11 +253,14 @@ def check_cellular_interface() -> CheckResult:
             warning="Cellular data may not be active",
         )
     except Exception as exc:
+        warning = "ifaddrs requires iOS/macOS"
+        if PLATFORM == 'ish':
+            warning = "On iSH, cellular detection requires native iOS interface"
         return CheckResult(
             "Cellular Interface",
             passed=False,
             detail=f"Cannot detect: {exc}",
-            warning="ifaddrs requires iOS/macOS",
+            warning=warning,
         )
 
 
@@ -214,9 +271,9 @@ def check_dns_resolution() -> CheckResult:
     for domain in test_domains:
         try:
             ip = socket.gethostbyname(domain)
-            results.append(f"{domain} → {ip}")
+            results.append(f"{domain} -> {ip}")
         except Exception as exc:
-            results.append(f"{domain} → FAILED ({exc})")
+            results.append(f"{domain} -> FAILED ({exc})")
 
     all_ok = all("FAILED" not in r for r in results)
     return CheckResult(
@@ -226,7 +283,7 @@ def check_dns_resolution() -> CheckResult:
     )
 
 
-def check_port_available(port: int, name: str) -> CheckResult:
+def check_port_available(port, name) -> CheckResult:
     """Check if a port is available for binding."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -238,7 +295,7 @@ def check_port_available(port: int, name: str) -> CheckResult:
             passed=True,
             detail="Available for binding",
         )
-    except OSError as exc:
+    except OSError:
         # Port might be in use because the proxy is already running
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -254,7 +311,7 @@ def check_port_available(port: int, name: str) -> CheckResult:
             return CheckResult(
                 f"Port {port} ({name})",
                 passed=False,
-                detail=f"Unavailable: {exc}",
+                detail="Unavailable (another process may be using it)",
             )
 
 
@@ -284,8 +341,8 @@ def check_proxy_connectivity() -> CheckResult:
         return CheckResult(
             "SOCKS5 Proxy Test",
             passed=False,
-            detail="Connection refused — proxy not running",
-            warning="Start the proxy first: python camofox_start.py",
+            detail="Connection refused \u2014 proxy not running",
+            warning="Start the proxy first: python3 camofox_start.py",
         )
     except Exception as exc:
         return CheckResult(
@@ -328,57 +385,85 @@ def check_dnspython() -> CheckResult:
             detail=f"Version {dns.version.version}",
         )
     except ImportError:
+        # Platform-specific install instructions
+        install_hints = {
+            'pythonista': "Install via StaSh: pip install dnspython",
+            'ashell': "In a-Shell run: pip install dnspython",
+            'ish': "In iSH run: pip3 install dnspython",
+            'pyto': "In Pyto: use built-in package manager or pip",
+            'generic': "Run: pip3 install dnspython",
+        }
+        hint = install_hints.get(PLATFORM, install_hints['generic'])
         return CheckResult(
             "dnspython Library",
             passed=False,
-            detail="Not installed",
-            warning="Install via StaSh: pip install dnspython",
+            detail="Not installed (proxy will use system DNS instead)",
+            warning=hint,
         )
 
 
 def check_keepalive_features() -> CheckResult:
-    """Check which keepalive features are available."""
-    features = []
+    """Check which keepalive features are available on this platform."""
+    universal_features = ["self-ping", "network-activity", "file-heartbeat"]
+    platform_features = []
+
+    # Check Pythonista-specific modules
     try:
         import console  # type: ignore
-        features.append("console")
+        platform_features.append("idle-timer (Pythonista)")
     except ImportError:
         pass
     try:
         from objc_util import on_main_thread  # type: ignore
-        features.append("objc_util")
+        platform_features.append("objc-bridge (Pythonista)")
     except ImportError:
         pass
     try:
         import sound  # type: ignore
-        features.append("sound")
+        platform_features.append("audio-keepalive (Pythonista)")
     except ImportError:
         pass
     try:
         import location  # type: ignore
-        features.append("location")
+        platform_features.append("gps-keepalive (Pythonista)")
     except ImportError:
         pass
 
-    if features:
-        return CheckResult(
-            "Keepalive Features",
-            passed=True,
-            detail=f"Available: {', '.join(features)}",
-        )
+    all_features = universal_features + platform_features
+    detail = f"Universal: {', '.join(universal_features)}"
+    if platform_features:
+        detail += f"\n     Platform-specific: {', '.join(platform_features)}"
     else:
-        return CheckResult(
-            "Keepalive Features",
-            passed=False,
-            detail="No Pythonista keepalive modules available",
-            warning="Keepalive requires Pythonista (console, sound, location)",
-        )
+        detail += f"\n     Platform: {PLATFORM} (no extra iOS modules)"
+
+    # Add platform-specific tip
+    tips = {
+        'ish': "Enable Location Services for iSH in iOS Settings for best persistence",
+        'ashell': "Keep a-Shell in foreground for best results",
+        'pyto': "Keep Pyto in foreground; use terminal mode",
+    }
+    warning = tips.get(PLATFORM, "")
+
+    return CheckResult(
+        "Keepalive Features",
+        passed=True,  # Universal features always available
+        detail=detail,
+        warning=warning,
+    )
 
 
-def check_router_reachability(router_ip: str = "192.168.8.1") -> CheckResult:
-    """Check if the router can be reached (try common IPs)."""
+def check_router_reachability(router_ip="192.168.8.1") -> CheckResult:
+    """Check if the router can be reached."""
     ips_to_try = [router_ip, "192.168.8.1", "192.168.1.1", "192.168.0.1"]
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_ips = []
     for ip in ips_to_try:
+        if ip not in seen:
+            seen.add(ip)
+            unique_ips.append(ip)
+
+    for ip in unique_ips:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
@@ -395,20 +480,40 @@ def check_router_reachability(router_ip: str = "192.168.8.1") -> CheckResult:
     return CheckResult(
         "Router Reachability",
         passed=False,
-        detail=f"Cannot reach router at any of: {', '.join(ips_to_try)}",
+        detail=f"Cannot reach router at any of: {', '.join(unique_ips)}",
         warning="Router may be on a different subnet or not connected",
     )
+
+
+def check_python_version() -> CheckResult:
+    """Check Python version meets minimum requirement (3.6+)."""
+    major, minor = sys.version_info[:2]
+    version_str = f"{major}.{minor}.{sys.version_info[2]}"
+    if major >= 3 and minor >= 6:
+        return CheckResult(
+            "Python Version",
+            passed=True,
+            detail=f"Python {version_str} (minimum: 3.6)",
+        )
+    else:
+        return CheckResult(
+            "Python Version",
+            passed=False,
+            detail=f"Python {version_str}",
+            warning="CamoFox requires Python 3.6 or later",
+        )
 
 
 # ---------------------------------------------------------------------------
 # Run all diagnostics
 # ---------------------------------------------------------------------------
 
-def run_all_checks() -> list[CheckResult]:
+def run_all_checks() -> list:
     """Execute all diagnostic checks and return results."""
     results = []
 
-    results.append(check_pythonista_env())
+    results.append(check_environment())
+    results.append(check_python_version())
     results.append(check_network_interfaces())
     results.append(check_wifi_connectivity())
     results.append(check_cellular_interface())
@@ -425,12 +530,18 @@ def run_all_checks() -> list[CheckResult]:
     return results
 
 
-def format_report(results: list[CheckResult]) -> str:
+def format_report(results) -> str:
     """Format diagnostic results as a readable report."""
     lines = [
-        "╔══════════════════════════════════════════════════╗",
-        "║       🦊 CamoFox Network Diagnostics             ║",
-        "╚══════════════════════════════════════════════════╝",
+        "\033[36m\033[1m"
+        "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557"
+        "\033[0m",
+        "\033[36m\033[1m"
+        "\u2551       \U0001f98a CamoFox Network Diagnostics             \u2551"
+        "\033[0m",
+        "\033[36m\033[1m"
+        "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d"
+        "\033[0m",
         "",
     ]
 
@@ -442,18 +553,18 @@ def format_report(results: list[CheckResult]) -> str:
         lines.append(str(result))
         lines.append("")
 
-    lines.append("─" * 50)
-    lines.append(f"Results: {passed}/{total} passed", )
+    lines.append("\u2500" * 50)
+    lines.append(f"Results: {passed}/{total} passed")
     if warnings:
         lines.append(f"Warnings: {warnings}")
     lines.append("")
 
     if passed == total:
-        lines.append("🎉 All checks passed! Your setup looks good.")
+        lines.append("\033[32m\U0001f389 All checks passed! Your setup looks good.\033[0m")
     elif passed >= total - 2:
-        lines.append("👍 Most checks passed. Review warnings above.")
+        lines.append("\033[33m\U0001f44d Most checks passed. Review warnings above.\033[0m")
     else:
-        lines.append("⚠️  Several checks failed. Review the report above.")
+        lines.append("\033[31m\u26a0\ufe0f  Several checks failed. Review the report above.\033[0m")
 
     return "\n".join(lines)
 
@@ -467,7 +578,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="CamoFox Network Diagnostics",
+        description="CamoFox Network Diagnostics (cross-platform)",
     )
     parser.add_argument(
         "--json", action="store_true",
@@ -487,6 +598,7 @@ def main():
         output = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "python_version": sys.version,
+            "platform": PLATFORM,
             "checks": [r.to_dict() for r in results],
             "summary": {
                 "passed": sum(1 for r in results if r.passed),

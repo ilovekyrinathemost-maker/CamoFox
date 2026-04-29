@@ -1,28 +1,30 @@
 #!python3
-"""CamoFox Enhanced SOCKS5/HTTP Proxy for Pythonista.
+"""CamoFox Enhanced SOCKS5/HTTP Proxy for iOS.
 
-An improved version of the iOS-SOCKS-Server proxy optimised for the
-CamoFox tethering-bypass use case.  It wraps the existing ``lib/``
-proxy server classes and adds:
+Cross-platform proxy that works on all iOS Python environments:
+  • a-Shell (FREE)     • iSH (FREE)
+  • Pyto (FREE)        • Pythonista ($9.99)
 
-  • Auto-detection of WiFi / cellular / VPN interfaces
-  • Integrated keepalive to prevent iOS suspension
-  • Rich statistics (bytes, connections, uptime, errors)
-  • Auto-restart on crash with configurable retry policy
-  • Reduced logging overhead to minimise Pythonista CPU
-  • WPAD server for easy client auto-configuration
-  • Graceful handling of network interface changes
+Wraps the existing ``lib/`` proxy server classes and adds:
+
+  \u2022 Auto-detection of WiFi / cellular / VPN interfaces
+  \u2022 Integrated keepalive to prevent iOS suspension (cross-platform)
+  \u2022 Rich statistics (bytes, connections, uptime, errors)
+  \u2022 Auto-restart on crash with configurable retry policy
+  \u2022 Reduced logging overhead to minimise CPU usage
+  \u2022 WPAD server for easy client auto-configuration
+  \u2022 Graceful handling of network interface changes
 
 Usage (standalone)::
 
-    python camofox_proxy.py          # auto-detect everything
-    python camofox_proxy.py --port 1080  # custom SOCKS port
+    python3 camofox_proxy.py              # auto-detect everything
+    python3 camofox_proxy.py --port 1080  # custom SOCKS port
 
 Usage (as module)::
 
     from camofox_proxy import CamoFoxProxy
     proxy = CamoFoxProxy()
-    proxy.run()                      # blocking
+    proxy.run()                           # blocking
 """
 
 from __future__ import annotations
@@ -53,6 +55,19 @@ for _p in (_PROJECT_ROOT, _THIS_DIR):
         sys.path.insert(0, _p)
 
 # ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+try:
+    from platform_detect import PLATFORM, CAPABILITIES, get_platform_info
+except ImportError:
+    try:
+        from camofox_ios.platform_detect import PLATFORM, CAPABILITIES, get_platform_info  # type: ignore
+    except ImportError:
+        PLATFORM = 'generic'
+        CAPABILITIES = {'background_persist': 'good'}
+        def get_platform_info(): return f"Platform: generic\nPython: {sys.version.split()[0]}"
+
+# ---------------------------------------------------------------------------
 # Now import project modules
 # ---------------------------------------------------------------------------
 from lib.socks5_server import AsyncSocks5Handler  # noqa: E402
@@ -63,7 +78,10 @@ from lib.status import StatusMonitor  # noqa: E402
 try:
     from keepalive import KeepaliveManager  # noqa: E402
 except ImportError:
-    from camofox_ios.keepalive import KeepaliveManager  # type: ignore
+    try:
+        from camofox_ios.keepalive import KeepaliveManager  # type: ignore
+    except ImportError:
+        KeepaliveManager = None  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Configuration — edit these values to taste
@@ -103,12 +121,16 @@ class ProxyConfig:
 
     # Keepalive ----------------------------------------------------------------
     enable_keepalive: bool = True      # use KeepaliveManager
-    keepalive_audio: bool = True       # silent audio loop
-    keepalive_location: bool = False   # GPS keepalive (battery heavy)
+    keepalive_audio: bool = True       # silent audio loop (Pythonista only)
+    keepalive_location: bool = False   # GPS keepalive (Pythonista only, battery heavy)
+    keepalive_network: bool = True     # network activity keepalive (all platforms)
+    keepalive_file_io: bool = True     # file I/O keepalive (all platforms)
     keepalive_ping_interval: float = 30.0
+    keepalive_network_interval: float = 45.0
+    keepalive_file_interval: float = 60.0
 
     # Logging ------------------------------------------------------------------
-    log_level: int = logging.ERROR     # minimise output for Pythonista
+    log_level: int = logging.ERROR     # minimise output
     status_interval: float = 1.0       # status display refresh rate (sec)
 
 
@@ -171,7 +193,7 @@ def _is_globally_routable(ipv6_address: str) -> bool:
     return not any(addr in ipaddress.ip_network(n) for n in non_routable)
 
 
-def detect_interfaces(config: ProxyConfig) -> tuple[str, str, Optional[str], str]:
+def detect_interfaces(config: ProxyConfig) -> tuple:
     """Auto-detect proxy_host, connect_host_ipv4, connect_host_ipv6.
 
     Returns:
@@ -179,14 +201,14 @@ def detect_interfaces(config: ProxyConfig) -> tuple[str, str, Optional[str], str
     """
     proxy_host = config.proxy_host or "172.20.10.1"
     connect_ipv4 = config.connect_host_ipv4 or "0.0.0.0"
-    connect_ipv6: Optional[str] = config.connect_host_ipv6
-    info_lines: list[str] = []
+    connect_ipv6 = config.connect_host_ipv6
+    info_lines = []
 
     try:
         from lib import ifaddrs
 
         interfaces = ifaddrs.get_interfaces()
-        iftypes: dict[str, list] = defaultdict(list)
+        iftypes = defaultdict(list)
 
         for iface in interfaces:
             if not iface.addr:
@@ -229,9 +251,10 @@ def detect_interfaces(config: ProxyConfig) -> tuple[str, str, Optional[str], str
                     f"Proxy host: {proxy_host} (WiFi {iface.name})"
                 )
         else:
-            info_lines.append(f"Proxy host: {proxy_host} (default — no WiFi detected)")
+            info_lines.append(f"Proxy host: {proxy_host} (default \u2014 no WiFi detected)")
 
         # Detect cellular/VPN interface for outbound connections
+        ipv6_iface = None
         if iftypes["cell"]:
             ipv4_iface = next(
                 (i for i in iftypes["cell"] if i.addr.family == socket.AF_INET),
@@ -266,12 +289,12 @@ def detect_interfaces(config: ProxyConfig) -> tuple[str, str, Optional[str], str
 
             if ipv6_iface:
                 # Test IPv6 connectivity
+                test_sock = None
                 try:
                     test_sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
                     test_sock.settimeout(5)
                     test_sock.bind((ipv6_iface.addr.address, 0))
                     test_sock.connect(("2606:4700:4700::1111", 80))
-                    test_sock.close()
                     connect_ipv6 = ipv6_iface.addr.address
                     info_lines.append(
                         f"Connect IPv6: {connect_ipv6} ({ipv6_iface.name})"
@@ -280,10 +303,11 @@ def detect_interfaces(config: ProxyConfig) -> tuple[str, str, Optional[str], str
                     info_lines.append(f"IPv6 test failed: {exc}")
                     connect_ipv6 = None
                 finally:
-                    try:
-                        test_sock.close()
-                    except Exception:
-                        pass
+                    if test_sock:
+                        try:
+                            test_sock.close()
+                        except Exception:
+                            pass
 
     except Exception as exc:
         info_lines.append(f"Interface detection failed: {exc}")
@@ -359,14 +383,14 @@ class CamoFoxProxy:
     """Enhanced SOCKS5/HTTP proxy with auto-restart and keepalive.
 
     Wraps the existing ``lib/`` proxy server classes and adds reliability
-    features specific to running on iOS via Pythonista.
+    features for running on iOS across all Python environments.
     """
 
     def __init__(self, config: Optional[ProxyConfig] = None):
         self.config = config or CONFIG
         self.stats = ProxyStats()
-        self._keepalive: Optional[KeepaliveManager] = None
-        self._wpad_server: Optional[HTTPServer] = None
+        self._keepalive = None  # type: Optional[KeepaliveManager]
+        self._wpad_server = None  # type: Optional[HTTPServer]
         self._running = False
         self._shutdown_event = threading.Event()
 
@@ -379,11 +403,16 @@ class CamoFoxProxy:
         self._running = True
 
         # Start keepalive
-        if self.config.enable_keepalive:
+        if self.config.enable_keepalive and KeepaliveManager is not None:
             self._keepalive = KeepaliveManager(
                 use_audio=self.config.keepalive_audio,
                 use_location=self.config.keepalive_location,
+                use_network=self.config.keepalive_network,
+                use_file_io=self.config.keepalive_file_io,
                 ping_interval=self.config.keepalive_ping_interval,
+                network_interval=self.config.keepalive_network_interval,
+                file_interval=self.config.keepalive_file_interval,
+                target_port=self.config.socks_port,
             )
             ka_results = self._keepalive.start()
             for k, v in ka_results.items():
@@ -415,13 +444,13 @@ class CamoFoxProxy:
 
                 if consecutive_failures >= self.config.max_restart_attempts:
                     logging.error(
-                        "Proxy crashed %d times — giving up: %s",
+                        "Proxy crashed %d times \u2014 giving up: %s",
                         consecutive_failures, exc,
                     )
                     break
 
                 logging.warning(
-                    "Proxy crashed (attempt %d/%d): %s — restarting in %.1fs",
+                    "Proxy crashed (attempt %d/%d): %s \u2014 restarting in %.1fs",
                     consecutive_failures,
                     self.config.max_restart_attempts,
                     exc,
@@ -464,9 +493,10 @@ class CamoFoxProxy:
 
         # Build banner
         banner = (
-            "╔══════════════════════════════════════════════════╗\n"
-            "║           CamoFox SOCKS5/HTTP Proxy              ║\n"
-            "╚══════════════════════════════════════════════════╝\n"
+            "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\n"
+            "\u2551           CamoFox SOCKS5/HTTP Proxy              \u2551\n"
+            "\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\n"
+            f"Platform:   {PLATFORM}\n"
             f"{info_text}\n"
             f"SOCKS5:     {proxy_host}:{self.config.socks_port}\n"
             f"HTTP Proxy: {proxy_host}:{self.config.http_port}\n"
@@ -507,7 +537,7 @@ class CamoFoxProxy:
         connect_ipv4: str,
         connect_ipv6: Optional[str],
     ) -> None:
-        """Async entry point — start SOCKS5 + HTTP servers."""
+        """Async entry point \u2014 start SOCKS5 + HTTP servers."""
         # SOCKS5 server
         socks_server = AsyncProxyServer(
             AsyncSocks5Handler,
@@ -559,6 +589,7 @@ class CamoFoxProxy:
     def get_stats(self) -> dict:
         """Return current proxy statistics."""
         return {
+            "platform": PLATFORM,
             "uptime": self.stats.uptime_str,
             "uptime_seconds": self.stats.uptime,
             "restart_count": self.stats.restart_count,
@@ -577,14 +608,16 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="CamoFox Enhanced SOCKS5/HTTP Proxy",
+        description="CamoFox Enhanced SOCKS5/HTTP Proxy (cross-platform iOS)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "Supported platforms: a-Shell (free), iSH (free), Pyto (free), Pythonista\n"
+            "\n"
             "Examples:\n"
-            "  python camofox_proxy.py                    # auto-detect everything\n"
-            "  python camofox_proxy.py --socks-port 1080  # custom SOCKS port\n"
-            "  python camofox_proxy.py --host 192.168.2.1 # explicit host\n"
-            "  python camofox_proxy.py --no-restart       # disable auto-restart\n"
+            "  python3 camofox_proxy.py                    # auto-detect everything\n"
+            "  python3 camofox_proxy.py --socks-port 1080  # custom SOCKS port\n"
+            "  python3 camofox_proxy.py --host 192.168.2.1 # explicit host\n"
+            "  python3 camofox_proxy.py --no-restart       # disable auto-restart\n"
         ),
     )
     parser.add_argument(
@@ -605,14 +638,22 @@ def main():
     )
     parser.add_argument(
         "--no-keepalive", action="store_true",
-        help="Disable iOS keepalive strategies",
+        help="Disable all keepalive strategies",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--platform", action="store_true",
+        help="Show detected platform info and exit",
+    )
 
     args = parser.parse_args()
+
+    if args.platform:
+        print(get_platform_info())
+        return
 
     config = ProxyConfig(
         proxy_host=args.host,

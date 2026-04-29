@@ -1,11 +1,16 @@
 #!python3
-"""CamoFox Status Dashboard — Pythonista-native proxy monitor.
+"""CamoFox Status Dashboard — Cross-platform proxy monitor.
 
-Displays real-time proxy statistics using Pythonista's ``console``
-module (falls back to ANSI terminal on non-iOS platforms).
+Displays real-time proxy statistics using ANSI terminal escape codes.
+Works on all supported iOS Python environments:
+  • a-Shell  — Full ANSI color support
+  • iSH      — Full ANSI color support
+  • Pyto     — ANSI colors in terminal mode
+  • Pythonista — ANSI colors + optional console module enhancements
 
 Metrics shown:
   • Proxy status (running / stopped / error)
+  • Platform and keepalive info
   • Connected client count
   • Bytes transferred (upload / download)
   • Uptime
@@ -42,14 +47,56 @@ for _p in (_PROJECT_ROOT, _THIS_DIR):
         sys.path.insert(0, _p)
 
 # ---------------------------------------------------------------------------
-# Pythonista detection
+# Platform detection
 # ---------------------------------------------------------------------------
-_IS_PYTHONISTA = "Pythonista" in sys.executable
-
 try:
-    import console as ios_console  # type: ignore
+    from platform_detect import PLATFORM, CAPABILITIES
 except ImportError:
-    ios_console = None
+    try:
+        from camofox_ios.platform_detect import PLATFORM, CAPABILITIES  # type: ignore
+    except ImportError:
+        PLATFORM = 'generic'
+        CAPABILITIES = {'ansi_colors': True, 'gui': False}
+
+# Pythonista console (optional enhancement)
+_ios_console = None
+try:
+    import console as _ios_console  # type: ignore
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# ANSI Color helpers — work on all terminals
+# ---------------------------------------------------------------------------
+class _Colors:
+    """ANSI escape code constants for terminal colors."""
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    # Foreground
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    # Background
+    BG_RED = '\033[41m'
+    BG_GREEN = '\033[42m'
+    BG_BLUE = '\033[44m'
+
+
+class _NoColors:
+    """No-op color constants for environments without ANSI support."""
+    RESET = BOLD = DIM = ''
+    RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = ''
+    BG_RED = BG_GREEN = BG_BLUE = ''
+
+
+# Auto-select based on capabilities
+C = _Colors() if CAPABILITIES.get('ansi_colors', True) else _NoColors()
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +116,7 @@ def _format_bytes(nbytes: int) -> str:
 
 
 def _format_speed(bps: float) -> str:
-    """Human-readable speed (bits per second → Mbps)."""
+    """Human-readable speed (bits per second -> Mbps)."""
     mbps = bps * 8 / (1024 * 1024)
     if mbps < 0.01:
         return "0 Mbps"
@@ -80,15 +127,27 @@ def _format_speed(bps: float) -> str:
 
 
 def _quality_indicator(active_connections: int, error_count: int) -> str:
-    """Simple connection quality emoji indicator."""
+    """Connection quality indicator with color."""
     if error_count > 10:
-        return "🔴 Poor"
+        return f"{C.RED}● Poor{C.RESET}"
     elif error_count > 3:
-        return "🟡 Fair"
+        return f"{C.YELLOW}● Fair{C.RESET}"
     elif active_connections > 0:
-        return "🟢 Good"
+        return f"{C.GREEN}● Good{C.RESET}"
     else:
-        return "⚪ Idle"
+        return f"{C.DIM}● Idle{C.RESET}"
+
+
+def _platform_badge() -> str:
+    """Return a colored platform badge."""
+    badges = {
+        'pythonista': f"{C.MAGENTA}Pythonista{C.RESET}",
+        'ashell': f"{C.GREEN}a-Shell{C.RESET}",
+        'ish': f"{C.CYAN}iSH{C.RESET}",
+        'pyto': f"{C.BLUE}Pyto{C.RESET}",
+        'generic': f"{C.WHITE}Python{C.RESET}",
+    }
+    return badges.get(PLATFORM, PLATFORM)
 
 
 def _get_wifi_ip() -> str:
@@ -116,11 +175,15 @@ def _get_wifi_ip() -> str:
 
 
 def _clear_screen() -> None:
-    """Clear console output."""
-    if ios_console and _IS_PYTHONISTA:
-        ios_console.clear()
-    else:
-        print("\033c", end="")
+    """Clear console output — cross-platform."""
+    if _ios_console and PLATFORM == 'pythonista':
+        try:
+            _ios_console.clear()
+            return
+        except Exception:
+            pass
+    # ANSI clear — works on a-Shell, iSH, Pyto, and any terminal
+    print("\033[2J\033[H", end="", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +192,9 @@ def _clear_screen() -> None:
 
 class CamoFoxDashboard:
     """Real-time status dashboard for the CamoFox proxy.
+
+    Uses ANSI escape codes for cross-platform colored terminal output.
+    Automatically enhanced with Pythonista console features when available.
 
     Args:
         proxy: A ``CamoFoxProxy`` instance (or None for standalone mode).
@@ -153,11 +219,14 @@ class CamoFoxDashboard:
         """Generate a single frame of the dashboard as a string."""
         lines = []
 
-        # Header
-        lines.append("╔══════════════════════════════════════════════╗")
-        lines.append("║        🦊 CamoFox Status Dashboard          ║")
-        lines.append("╚══════════════════════════════════════════════╝")
+        # Header with color
+        lines.append(f"{C.BOLD}{C.CYAN}╔══════════════════════════════════════════════╗{C.RESET}")
+        lines.append(f"{C.BOLD}{C.CYAN}║        🦊 CamoFox Status Dashboard          ║{C.RESET}")
+        lines.append(f"{C.BOLD}{C.CYAN}╚══════════════════════════════════════════════╝{C.RESET}")
         lines.append("")
+
+        # Platform info
+        lines.append(f"  Platform:    {_platform_badge()}")
 
         # Proxy status
         if self._proxy:
@@ -167,81 +236,84 @@ class CamoFoxDashboard:
             running = False
             stats = None
 
-        status_str = "🟢 RUNNING" if running else "🔴 STOPPED"
+        if running:
+            status_str = f"{C.GREEN}{C.BOLD}● RUNNING{C.RESET}"
+        else:
+            status_str = f"{C.RED}{C.BOLD}● STOPPED{C.RESET}"
         lines.append(f"  Status:      {status_str}")
 
         # Uptime
         if stats and stats.start_time > 0:
-            lines.append(f"  Uptime:      {stats.uptime_str}")
+            lines.append(f"  Uptime:      {C.WHITE}{stats.uptime_str}{C.RESET}")
         else:
             elapsed = int(time.time() - self._start_time)
             mins, secs = divmod(elapsed, 60)
             hours, mins = divmod(mins, 60)
-            lines.append(f"  Uptime:      {hours}h {mins}m {secs}s")
+            lines.append(f"  Uptime:      {C.WHITE}{hours}h {mins}m {secs}s{C.RESET}")
 
         lines.append("")
 
         # Network info
-        lines.append("  ── Network ──────────────────────────────────")
-        lines.append(f"  WiFi IP:     {self._wifi_ip}")
+        lines.append(f"  {C.BOLD}── Network ──────────────────────────────────{C.RESET}")
+        lines.append(f"  WiFi IP:     {C.YELLOW}{self._wifi_ip}{C.RESET}")
 
         if self._proxy:
             cfg = self._proxy.config
-            lines.append(f"  SOCKS5:      {self._wifi_ip}:{cfg.socks_port}")
-            lines.append(f"  HTTP Proxy:  {self._wifi_ip}:{cfg.http_port}")
-            lines.append(f"  WPAD/PAC:    http://{self._wifi_ip}:{cfg.wpad_port}/wpad.dat")
+            lines.append(f"  SOCKS5:      {C.GREEN}{self._wifi_ip}:{cfg.socks_port}{C.RESET}")
+            lines.append(f"  HTTP Proxy:  {C.GREEN}{self._wifi_ip}:{cfg.http_port}{C.RESET}")
+            lines.append(f"  WPAD/PAC:    {C.DIM}http://{self._wifi_ip}:{cfg.wpad_port}/wpad.dat{C.RESET}")
         else:
-            lines.append("  SOCKS5:      (not connected)")
+            lines.append(f"  SOCKS5:      {C.DIM}(not connected){C.RESET}")
 
         lines.append("")
 
         # Traffic stats
-        lines.append("  ── Traffic ──────────────────────────────────")
+        lines.append(f"  {C.BOLD}── Traffic ──────────────────────────────────{C.RESET}")
         if self._monitor:
             in_speed, in_total = self._monitor.inbound.update()
             out_speed, out_total = self._monitor.outbound.update()
             num_conn = self._monitor.num_connections
             num_err = self._monitor.num_errors
 
-            lines.append(f"  Connections: {num_conn}")
-            lines.append(f"  Download:    {_format_speed(in_speed)}  ({_format_bytes(in_total)} total)")
-            lines.append(f"  Upload:      {_format_speed(out_speed)}  ({_format_bytes(out_total)} total)")
-            lines.append(f"  Total Data:  {_format_bytes(in_total + out_total)}")
+            lines.append(f"  Connections: {C.WHITE}{num_conn}{C.RESET}")
+            lines.append(f"  Download:    {C.CYAN}{_format_speed(in_speed)}{C.RESET}  ({_format_bytes(in_total)} total)")
+            lines.append(f"  Upload:      {C.CYAN}{_format_speed(out_speed)}{C.RESET}  ({_format_bytes(out_total)} total)")
+            lines.append(f"  Total Data:  {C.BOLD}{_format_bytes(in_total + out_total)}{C.RESET}")
             lines.append(f"  Quality:     {_quality_indicator(num_conn, num_err)}")
 
             if num_err > 0:
-                lines.append(f"  Errors:      {num_err}")
+                lines.append(f"  Errors:      {C.RED}{num_err}{C.RESET}")
         else:
-            lines.append("  (no traffic data available)")
+            lines.append(f"  {C.DIM}(no traffic data available){C.RESET}")
 
         lines.append("")
 
         # Restart info
         if stats and stats.restart_count > 0:
-            lines.append("  ── Reliability ──────────────────────────────")
-            lines.append(f"  Restarts:    {stats.restart_count}")
+            lines.append(f"  {C.BOLD}── Reliability ──────────────────────────────{C.RESET}")
+            lines.append(f"  Restarts:    {C.YELLOW}{stats.restart_count}{C.RESET}")
             if stats.last_error:
-                lines.append(f"  Last Error:  {stats.last_error[:50]}")
+                lines.append(f"  Last Error:  {C.RED}{stats.last_error[:50]}{C.RESET}")
             lines.append("")
 
         # Keepalive info
         if self._proxy and self._proxy._keepalive:
             ka_status = self._proxy._keepalive.status()
-            active = [k for k, v in ka_status.items() if v and k != "running"]
+            active = [k for k, v in ka_status.items() if v and k not in ('running', 'platform')]
             if active:
-                lines.append("  ── Keepalive ────────────────────────────────")
-                lines.append(f"  Active:      {', '.join(active)}")
+                lines.append(f"  {C.BOLD}── Keepalive ──────────────────────────────{C.RESET}")
+                lines.append(f"  Active:      {C.GREEN}{', '.join(active)}{C.RESET}")
                 lines.append("")
 
         # Log messages
         if self._monitor and self._monitor.messages:
-            lines.append("  ── Recent Log ───────────────────────────────")
+            lines.append(f"  {C.BOLD}── Recent Log ─────────────────────────────{C.RESET}")
             for msg in self._monitor.messages[-3:]:
-                lines.append(f"  {msg[:60]}")
+                lines.append(f"  {C.DIM}{msg[:60]}{C.RESET}")
             lines.append("")
 
         # Footer
-        lines.append("  Press Ctrl+C to stop")
+        lines.append(f"  {C.DIM}Press Ctrl+C to stop{C.RESET}")
 
         return "\n".join(lines)
 
@@ -260,7 +332,7 @@ class CamoFoxDashboard:
                 print(self.render_frame())
                 time.sleep(self._interval)
         except KeyboardInterrupt:
-            print("\nDashboard stopped.")
+            print(f"\n{C.DIM}Dashboard stopped.{C.RESET}")
 
     def refresh_wifi_ip(self) -> None:
         """Re-detect WiFi IP (call after network change)."""
@@ -271,9 +343,10 @@ class CamoFoxDashboard:
 # Standalone test mode
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    print("CamoFox Dashboard — Standalone Test Mode")
-    print(f"WiFi IP: {_get_wifi_ip()}")
-    print(f"Platform: {'Pythonista' if _IS_PYTHONISTA else 'Desktop/Server'}")
+    print(f"CamoFox Dashboard — Standalone Test Mode")
+    print(f"Platform: {_platform_badge()}")
+    print(f"WiFi IP:  {_get_wifi_ip()}")
+    print(f"ANSI:     {CAPABILITIES.get('ansi_colors', False)}")
     print()
 
     # Run without a proxy for visual testing
