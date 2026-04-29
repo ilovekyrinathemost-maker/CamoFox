@@ -49,12 +49,22 @@ Instead of using iPhone's **Personal Hotspot** (which T-Mobile detects via a spe
 ## 📦 What's Included
 
 ```
+```
 camofox/
 ├── camofox-router/          # GL-iNet Opal plugin (OpenWrt)
 │   ├── scripts/install.sh   # One-click installer
 │   ├── scripts/setup-wizard.sh
 │   ├── files/               # All config files, firewall rules, services
 │   └── README.md            # Router-specific documentation
+│
+├── camofox-mac/             # MacBook direct-connect mode (NEW!)
+│   ├── camofox-mac.sh       # Main CLI (start/stop/status/test/find)
+│   ├── discover.sh          # Auto-find iPhone on network
+│   ├── dns-setup.sh         # DNS leak prevention
+│   ├── proxy_helper.py      # Transparent proxy for force mode
+│   ├── pfctl-rules.conf     # Packet filter rules
+│   ├── install.sh           # macOS installer
+│   └── README.md            # Mac-specific documentation
 │
 ├── camofox-ios/             # iPhone proxy app (Pythonista)
 │   ├── camofox_start.py     # One-tap launcher
@@ -115,7 +125,26 @@ camofox/
    ```bash
    camofox setup
    ```
-5. Follow the interactive prompts to configure
+
+### 🍎 Option B: MacBook Direct Connect (No Router Needed)
+
+If you don't have the GL-iNet Opal with you, your MacBook can connect directly:
+
+1. Connect both your MacBook and iPhone to the **same WiFi network**
+2. Run `camofox_start.py` in Pythonista on the iPhone
+3. On your MacBook:
+   ```bash
+   cd camofox-mac
+   sh install.sh
+   camofox-mac start
+   ```
+4. CamoFox auto-discovers the iPhone and routes all traffic through it
+
+**Two modes:**
+- **Simple mode** (default): Sets macOS system proxy — works for most apps
+- **Force mode**: Uses `pfctl` to capture ALL traffic — nothing leaks
+
+
 
 ### Step 3: Connect & Verify
 
@@ -190,8 +219,9 @@ camofox logs       # View logs
 |-----------|-------|-------|---------|
 | **Research** | 3 | 2,229 | Technical specification & analysis |
 | **Router Plugin** | 12 | 2,863 | OpenWrt package for GL-iNet Opal |
+| **Mac Direct Connect** | 10 | 3,452 | MacBook-to-iPhone tunnel |
 | **iOS App** | 9 | 2,925 | Enhanced proxy & automation |
-| **Total** | **24** | **8,017** | Complete bypass system |
+| **Total** | **34+** | **11,469+** | Complete multi-platform bypass system |
 
 ---
 
@@ -223,9 +253,8 @@ If you discover a security vulnerability, please follow our [Security Policy](SE
 
 ---
 
-## ⚡ TL;DR
-
 1. Run SOCKS proxy on iPhone via Pythonista
-2. Router connects to iPhone WiFi, tunnels ALL traffic through proxy
-3. T-Mobile sees normal iPhone traffic — no hotspot APN, no TTL anomalies, no DPI flags
-4. Enjoy unlimited, unthrottled internet on all your devices
+2. **With router**: Opal tunnels all WiFi devices through proxy
+3. **Without router**: MacBook connects directly via `camofox-mac`
+4. T-Mobile sees normal iPhone traffic — no hotspot APN, no TTL anomalies, no DPI flags
+5. Enjoy unlimited, unthrottled internet on all your devices
