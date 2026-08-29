@@ -34,6 +34,7 @@ print_ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
 print_fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
 print_warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
 print_info() { printf "  ${CYAN}•${RESET} %s\n" "$1"; }
+print_dim()  { printf "  ${DIM}%s${RESET}\n" "$1"; }
 
 banner() {
     printf "\n${BOLD}${CYAN}"
@@ -284,8 +285,7 @@ main() {
     printf "${BOLD}Configuration:${RESET} ${CONFIG_DIR}/config\n"
     printf "${BOLD}Logs:${RESET}          ${CONFIG_DIR}/camofox.log\n"
     echo ""
-    printf "${DIM}For force mode (catches ALL traffic): sudo camofox-mac start${RESET}\n"
-    printf "${DIM}Edit ~/.camofox/config and set MODE=force${RESET}\n"
+    printf "${DIM}Simple mode (system proxy) is the supported path. MODE=force is not implemented.${RESET}\n"
     echo ""
 }
 
