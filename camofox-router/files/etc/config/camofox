@@ -16,8 +16,8 @@ config camofox 'main'
 	# WiFi hotspot default: 172.20.10.1
 	option proxy_ip '172.20.10.1'
 
-	# SOCKS5 proxy port (iOS-SOCKS-Server default: 1080)
-	option proxy_port '1080'
+	# SOCKS5 proxy port (CamoFox iOS default: 9876)
+	option proxy_port '9876'
 
 	# HTTP proxy port (iOS-SOCKS-Server default: 1081)
 	option http_proxy_port '1081'

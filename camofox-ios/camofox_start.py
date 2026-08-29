@@ -63,6 +63,15 @@ def main():
     print()
 
     try:
+        import dns.asyncresolver  # noqa: F401
+    except ImportError:
+        print("\033[31mERROR: dnspython is required (dns.asyncresolver).\033[0m")
+        print("Copy the repo dns/ folder next to lib/, or install dnspython:")
+        print("  pip install dnspython")
+        print(f"Looked in: {_PROJECT_ROOT}")
+        sys.exit(1)
+
+    try:
         from camofox_proxy import CamoFoxProxy, ProxyConfig
     except ImportError as e:
         print(f"\033[31mERROR: Could not import CamoFox proxy: {e}\033[0m")
@@ -72,7 +81,7 @@ def main():
         print("Required directories:")
         print(f"  camofox-ios/  (this folder)")
         print(f"  lib/          (proxy server library)")
-        print(f"  dns/          (DNS resolver library, optional)")
+        print(f"  dns/          (required — bundled dnspython, or: pip install dnspython)")
         sys.exit(1)
 
     # Default configuration — optimised for CamoFox + GL-iNet Opal
