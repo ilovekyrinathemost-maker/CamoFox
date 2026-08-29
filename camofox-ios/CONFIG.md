@@ -58,7 +58,7 @@ Option A — Using iCloud Drive:
 1. On your computer, copy these folders to iCloud Drive:
    - `camofox-ios/`
    - `lib/`
-   - `dns/` (optional, for enhanced DNS)
+   - `dns/` (required — bundled dnspython; or `pip install dnspython`)
 2. In a-Shell, access them via: `cd ~/Documents`
 
 Option B — Using the Files app:
@@ -66,10 +66,12 @@ Option B — Using the Files app:
 2. Navigate to the a-Shell folder
 3. Copy the project folders there
 
-#### Step 3: Install Optional Dependencies
+#### Step 3: Install dnspython (required)
+
+The proxy imports `dns.asyncresolver` at startup. Copy the repo `dns/` folder **or** install dnspython:
 
 ```bash
-# In a-Shell (optional — proxy works without this)
+# In a-Shell (required unless dns/ is already on PYTHONPATH)
 pip install dnspython
 ```
 
@@ -120,9 +122,10 @@ Option B — Manual copy:
 1. Use the Files app to copy folders into iSH's file system
 2. iSH's files are at: `/root/` or wherever you place them
 
-#### Step 4: Install Optional Dependencies
+#### Step 4: Install dnspython (required)
 
 ```bash
+# Required unless the repo dns/ folder is on PYTHONPATH
 pip3 install dnspython
 ```
 
@@ -207,11 +210,11 @@ Pythonista 3/
 │   ├── http_proxy_server.py
 │   ├── status.py
 │   └── ifaddrs.py
-└── dns/       (optional)
+└── dns/       (required unless dnspython is installed)
     └── ...
 ```
 
-#### Step 3: Install dnspython (Optional)
+#### Step 3: Install dnspython (required unless dns/ is copied)
 
 Pythonista uses StaSh package manager:
 1. Create a new script with this content and run it:
@@ -471,7 +474,7 @@ Or use DNS-over-HTTPS on the router (recommended regardless).
 - [ ] iOS Python app installed (a-Shell, iSH, Pyto, or Pythonista)
 - [ ] CamoFox files copied to the app
 - [ ] lib/ folder copied (required)
-- [ ] dns/ folder copied (optional, for better DNS)
+- [ ] dns/ folder copied, or dnspython installed (required)
 - [ ] Diagnostics pass (`python3 diagnostics.py`)
 - [ ] Proxy starts successfully (`python3 camofox_start.py`)
 - [ ] Router connected to iPhone WiFi
