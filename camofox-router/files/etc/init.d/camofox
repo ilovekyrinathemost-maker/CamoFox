@@ -26,7 +26,7 @@ load_camofox_config() {
     config_load camofox
     config_get ENABLED       main enabled       '0'
     config_get PROXY_IP      main proxy_ip      '172.20.10.1'
-    config_get PROXY_PORT    main proxy_port    '1080'
+    config_get PROXY_PORT    main proxy_port    '9876'
     config_get PROXY_TYPE    main proxy_type    'socks5'
     config_get REDSOCKS_PORT main redsocks_port '12345'
     config_get TTL_ENABLED   main ttl_enabled   '1'
@@ -74,7 +74,7 @@ generate_redsocks_conf() {
 		    log_debug = $log_debug;
 		    log_info = on;
 		    log = "syslog:daemon";
-		    daemon = on;
+		    daemon = off;
 		    redirector = iptables;
 		}
 
