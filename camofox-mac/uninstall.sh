@@ -66,11 +66,11 @@ stop_services() {
         fi
     done
 
-    for pid in "${pids_to_kill[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
-
+    # bash 3.2 + set -u: "${arr[@]}" on an empty array is unbound
     if [[ ${#pids_to_kill[@]} -gt 0 ]]; then
+        for pid in "${pids_to_kill[@]}"; do
+            kill "$pid" 2>/dev/null || true
+        done
         sleep 1
         for pid in "${pids_to_kill[@]}"; do
             kill -9 "$pid" 2>/dev/null || true
