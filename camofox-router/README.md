@@ -66,7 +66,7 @@ Unlike VPN or TTL-only approaches, the SOCKS5 proxy method is the **only** techn
 1. Install **Pythonista 3** from the App Store
 2. Download [iOS-SOCKS-Server](https://github.com/nneonneo/iOS-SOCKS-Server)
 3. Open `socks5.py` in Pythonista and run it
-4. The proxy starts on port **1080** (SOCKS5) and **1081** (HTTP)
+4. The proxy starts on port **9876** (SOCKS5) and **9877** (HTTP) for CamoFox iOS
 5. Keep Pythonista in the foreground
 
 ### 2. Connect iPhone to Router
@@ -148,7 +148,7 @@ uci show camofox
 uci set camofox.main.proxy_ip='172.20.10.1'
 
 # Change proxy port
-uci set camofox.main.proxy_port='1080'
+uci set camofox.main.proxy_port='9876'
 
 # Toggle kill switch
 uci set camofox.main.kill_switch='1'
@@ -164,7 +164,7 @@ camofox restart
 |---|---|---|
 | `enabled` | `1` | Master enable/disable |
 | `proxy_ip` | `172.20.10.1` | iPhone's IP address |
-| `proxy_port` | `1080` | SOCKS5 proxy port |
+| `proxy_port` | `9876` | SOCKS5 proxy port |
 | `proxy_type` | `socks5` | `socks5` or `http` |
 | `connection_mode` | `usb` | `usb` or `wifi` |
 | `auto_detect` | `1` | Auto-detect iPhone IP |
@@ -236,7 +236,7 @@ When enabled, the kill switch prevents any traffic from leaking if the proxy goe
 ip route  # Look for 172.20.10.x route
 
 # Test proxy directly
-nc -w 3 172.20.10.1 1080 && echo "OK" || echo "FAIL"
+nc -w 3 172.20.10.1 9876 && echo "OK" || echo "FAIL"
 
 # Check Pythonista is running on iPhone
 # iOS kills background apps — keep Pythonista in foreground
