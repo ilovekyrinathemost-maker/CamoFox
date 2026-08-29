@@ -397,7 +397,7 @@ def check_dnspython() -> CheckResult:
         return CheckResult(
             "dnspython Library",
             passed=False,
-            detail="Not installed (proxy will use system DNS instead)",
+            detail="Not installed (required — copy dns/ or pip install dnspython; proxy will crash on import)",
             warning=hint,
         )
 
