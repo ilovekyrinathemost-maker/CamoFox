@@ -19,7 +19,7 @@ FW_SCRIPT="/etc/camofox/firewall.rules"
 load_config() {
     config_load camofox
     config_get PROXY_IP         main proxy_ip          '172.20.10.1'
-    config_get PROXY_PORT       main proxy_port        '1080'
+    config_get PROXY_PORT       main proxy_port        '9876'
     config_get KILL_SWITCH      main kill_switch       '1'
     config_get HEALTH_INTERVAL  main health_interval   '30'
     config_get FAIL_THRESHOLD   main health_fail_threshold '3'
