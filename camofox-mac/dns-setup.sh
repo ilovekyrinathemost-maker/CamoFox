@@ -22,9 +22,27 @@ DNS_MODE=${DNS_MODE:-doh}
 NETWORK_SERVICE=${NETWORK_SERVICE:-Wi-Fi}
 DOH_SERVER=${DOH_SERVER:-https://cloudflare-dns.com/dns-query}
 FALLBACK_DNS=${FALLBACK_DNS:-1.1.1.1,1.0.0.1}
-STATE_DIR="${HOME}/.camofox"
+
+# Prefer STATE_DIR from the caller (camofox-mac.sh). Under sudo, HOME is
+# /var/root; fall back to the invoking user's ~/.camofox.
+if [[ -z "${STATE_DIR:-}" ]]; then
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        _dns_user="${SUDO_USER:-}"
+        if [[ -z "$_dns_user" || "$_dns_user" == "root" ]]; then
+            _dns_user=$(logname 2>/dev/null) || true
+        fi
+        if [[ -n "$_dns_user" && "$_dns_user" != "root" ]]; then
+            _dns_home=$(eval echo "~$_dns_user" 2>/dev/null) || true
+            if [[ -n "$_dns_home" && -d "$_dns_home" ]]; then
+                STATE_DIR="${_dns_home}/.camofox"
+            fi
+        fi
+    fi
+    STATE_DIR="${STATE_DIR:-${HOME}/.camofox}"
+fi
 DNS_BACKUP="${STATE_DIR}/dns_backup"
 DNS_PID_FILE="${STATE_DIR}/dns_helper.pid"
+DNS_LISTEN_PORT=53
 
 # Colors
 BOLD="\033[1m"
@@ -38,6 +56,14 @@ print_ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
 print_fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
 print_warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
 print_info() { printf "  ${CYAN}•${RESET} %s\n" "$1"; }
+
+run_priv() {
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Backup current DNS settings
@@ -145,14 +171,15 @@ DNSCRYPT_EOF
         if pgrep -x cloudflared >/dev/null 2>&1; then
             print_ok "cloudflared already running"
         else
-            sudo cloudflared proxy-dns \
-                --port 5053 \
+            run_priv cloudflared proxy-dns \
+                --address 127.0.0.1 \
+                --port "$DNS_LISTEN_PORT" \
                 --upstream "$DOH_SERVER" &
             echo $! > "$DNS_PID_FILE"
             sleep 2
 
             if pgrep -x cloudflared >/dev/null 2>&1; then
-                print_ok "cloudflared started on 127.0.0.1:5053"
+                print_ok "cloudflared started on 127.0.0.1:${DNS_LISTEN_PORT}"
             else
                 print_fail "cloudflared failed to start"
                 return 1
@@ -160,7 +187,7 @@ DNSCRYPT_EOF
         fi
 
         networksetup -setdnsservers "$NETWORK_SERVICE" 127.0.0.1
-        print_ok "DNS set to 127.0.0.1 (cloudflared)"
+        print_ok "DNS set to 127.0.0.1:${DNS_LISTEN_PORT} (cloudflared)"
         return 0
     fi
 
@@ -176,7 +203,7 @@ DNSCRYPT_EOF
 }
 
 # ---------------------------------------------------------------------------
-# Start DNS through SOCKS proxy (force mode only)
+# Start DNS through SOCKS proxy (local UDP/53 forwarder)
 # ---------------------------------------------------------------------------
 start_proxy_dns() {
     local proxy_ip="${1:-}"
@@ -203,7 +230,7 @@ SOCKS_HOST = sys.argv[1]
 SOCKS_PORT = int(sys.argv[2])
 UPSTREAM_DNS = "1.1.1.1"
 UPSTREAM_PORT = 53
-LISTEN_PORT = 5053
+LISTEN_PORT = 53
 
 def socks5_connect(target_host, target_port):
     """Connect to target through SOCKS5 proxy."""
@@ -282,15 +309,16 @@ PYEOF
         kill "$old_pid" 2>/dev/null || true
     fi
 
-    # Start DNS forwarder
-    python3 "$dns_forwarder" "$proxy_ip" "$socks_port" &
+    # Start DNS forwarder on port 53 (networksetup always queries :53).
+    # Binding to 53 requires root.
+    run_priv python3 "$dns_forwarder" "$proxy_ip" "$socks_port" &
     echo $! > "$DNS_PID_FILE"
     sleep 1
 
     if kill -0 "$(cat "$DNS_PID_FILE")" 2>/dev/null; then
-        print_ok "DNS forwarder started on 127.0.0.1:5053"
+        print_ok "DNS forwarder started on 127.0.0.1:${DNS_LISTEN_PORT}"
         networksetup -setdnsservers "$NETWORK_SERVICE" 127.0.0.1
-        print_ok "DNS set to 127.0.0.1 (SOCKS-tunneled)"
+        print_ok "DNS set to 127.0.0.1:${DNS_LISTEN_PORT} (SOCKS-tunneled)"
     else
         print_fail "DNS forwarder failed to start"
         return 1
@@ -369,14 +397,27 @@ main() {
         start)
             backup_dns
             case "$dns_mode" in
-                doh)    start_doh ;;
-                proxy)  start_proxy_dns "${3:-}" "${4:-9876}" ;;
+                doh)
+                    if ! start_doh; then
+                        print_fail "DoH setup failed — restoring previous DNS"
+                        restore_dns
+                        exit 1
+                    fi
+                    ;;
+                proxy)
+                    if ! start_proxy_dns "${3:-}" "${4:-9876}"; then
+                        print_fail "Proxy DNS setup failed — restoring previous DNS"
+                        restore_dns
+                        exit 1
+                    fi
+                    ;;
                 system)
                     print_warn "DNS mode set to 'system' — no changes made"
                     print_warn "DNS queries may leak to your ISP!"
                     ;;
                 *)
                     print_fail "Unknown DNS mode: $dns_mode"
+                    restore_dns
                     exit 1
                     ;;
             esac

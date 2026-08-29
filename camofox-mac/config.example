@@ -24,7 +24,8 @@ HTTP_PORT=9877
 # ---------------------------------------------------------------------------
 
 # "simple"  — Sets macOS system proxy (works for most apps)
-# "force"   — Uses pfctl + transparent proxy to catch ALL traffic
+# "force"   — NOT SUPPORTED. pf rdr on lo0 does not intercept en0 traffic.
+#             camofox-mac start will refuse MODE=force rather than fake an intercept.
 MODE=simple
 
 # ---------------------------------------------------------------------------
@@ -32,7 +33,7 @@ MODE=simple
 # ---------------------------------------------------------------------------
 
 # "doh"     — DNS-over-HTTPS via dnscrypt-proxy or cloudflared
-# "proxy"   — Route DNS through the SOCKS proxy (requires force mode)
+# "proxy"   — Route DNS through the SOCKS proxy (local forwarder on 127.0.0.1:53)
 # "system"  — Leave macOS DNS settings unchanged (not recommended)
 DNS_MODE=doh
 

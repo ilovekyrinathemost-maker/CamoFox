@@ -13,7 +13,7 @@ base {
     log_debug = {{LOG_DEBUG}};
     log_info = on;
     log = "syslog:daemon";
-    daemon = on;
+    daemon = off;
     redirector = iptables;
 }
 

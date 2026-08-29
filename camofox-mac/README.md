@@ -28,9 +28,9 @@ CamoFox Mac is a macOS companion tool for the [CamoFox](https://github.com/nneon
 | Hardware needed | GL-iNet Opal router | Just your MacBook |
 | TTL manipulation | ✅ via iptables | ❌ Not needed (same network) |
 | Covers all devices | ✅ Entire LAN | ❌ MacBook only |
-| Transparent proxying | ✅ redsocks | ✅ pfctl + Python helper |
+| Transparent proxying | ✅ redsocks | ❌ not implemented (see Force Mode) |
 | DNS leak prevention | ✅ https-dns-proxy | ✅ dnscrypt-proxy/cloudflared |
-| Kill switch | ✅ iptables | ✅ pfctl (force mode) |
+| Kill switch | ✅ iptables | ⚠️ health monitor only (simple mode) |
 | Portable | ✅ Travel router | ✅ Laptop-only |
 | Setup complexity | Medium | Simple |
 
@@ -39,7 +39,7 @@ CamoFox Mac is a macOS companion tool for the [CamoFox](https://github.com/nneon
 - **macOS 10.14+** (Mojave or later)
 - **Python 3** (ships with Xcode Command Line Tools: `xcode-select --install`)
 - **iPhone** on the same Wi-Fi, running CamoFox iOS proxy
-- **Admin password** (for force mode only)
+- **Admin password** (only if a helper needs to bind DNS port 53)
 
 ### Optional (Recommended)
 
@@ -117,27 +117,11 @@ camofox-mac start
 
 **Limitations:** Some apps ignore system proxy settings (e.g., some games, VPN clients, CLI tools without proxy env vars).
 
-### Force Mode (Catches ALL Traffic)
+### Force Mode (not implemented)
 
-Uses macOS packet filter (`pfctl`) to redirect ALL TCP traffic through the proxy. No app can bypass it.
+`MODE=force` is **not supported**. Previous pf rules used `rdr on lo0`, which never sees locally generated traffic leaving `en0`. CamoFox will not ship a fake transparent intercept.
 
-```bash
-# Edit config
-vim ~/.camofox/config
-# Set: MODE=force
-
-# Force mode requires root
-sudo camofox-mac start
-```
-
-**What it does:**
-- Everything in simple mode, PLUS:
-- Starts a local transparent proxy (`proxy_helper.py`)
-- Loads `pfctl` rules that redirect all outbound TCP to the local proxy
-- The local proxy forwards everything through the iPhone's SOCKS5 proxy
-- Blocks direct DNS (UDP 53) to prevent leaks
-
-**Requires:** `sudo` (root access) for pfctl
+`camofox-mac start` refuses `MODE=force` with an error. Use **simple mode** (system proxy). Apps that ignore macOS proxy settings will not be tunneled; set `ALL_PROXY` / `http_proxy` for CLI tools.
 
 ## DNS Leak Prevention
 
@@ -165,7 +149,7 @@ SOCKS_PORT=9876
 HTTP_PORT=9877
 
 # Operation mode
-MODE=simple          # simple or force
+MODE=simple          # only "simple" is supported
 
 # DNS leak prevention
 DNS_MODE=doh         # doh, proxy, or system
@@ -243,7 +227,7 @@ nc -z -G 2 <iphone-ip> 9876
 
 Some apps ignore macOS system proxy. Solutions:
 
-1. Switch to **force mode**: `MODE=force` + `sudo camofox-mac start`
+1. Force mode is **not implemented** (pf rdr on lo0 does not intercept en0).
 2. Set env variables for CLI tools:
    ```bash
    export ALL_PROXY=socks5://192.168.1.5:9876
@@ -267,17 +251,7 @@ DNS_MODE=proxy
 
 ### Force mode not working
 
-```bash
-# Must run as root
-sudo camofox-mac start
-
-# Check pfctl status
-sudo pfctl -s rules
-sudo pfctl -a com.camofox -s rules
-
-# Check transparent proxy
-ps aux | grep proxy_helper
-```
+Force mode is not implemented. `camofox-mac start` will refuse `MODE=force`. Use simple mode, or set `ALL_PROXY` for CLI tools. Leftover pf anchors from older builds: `sudo camofox-mac stop`.
 
 ### Connection slow
 
@@ -341,8 +315,8 @@ camofox-mac/
 ## Security Notes
 
 - **No encryption between Mac and iPhone** — traffic on the local Wi-Fi is unencrypted before reaching the SOCKS proxy. Use HTTPS for sensitive traffic (which you should be doing anyway).
-- **Admin password** is only needed for force mode (pfctl).
-- **Kill switch** prevents data leaks if the proxy goes down unexpectedly.
+- **Admin password** is not required for simple mode. Binding a local DNS listener on port 53 may prompt for sudo.
+- **Kill switch** in simple mode is a health-monitor marker only; it cannot block apps that ignore the system proxy.
 - The proxy runs **without authentication** — only use on trusted networks.
 
 ## License

@@ -130,7 +130,20 @@ install_dependencies() {
             if opkg install "$pkg" >/dev/null 2>&1; then
                 print_ok "$pkg installed"
             else
-                die "Failed to install $pkg (required)"
+                print_fail "opkg could not install $pkg"
+                echo ""
+                print_warn "GL-SFT1200 / GL-iNet Opal uses a SiFlower SDK (OpenWrt 18.06 fork),"
+                print_warn "not mainline OpenWrt. $pkg is often missing from the GL feed."
+                echo ""
+                print_info "This installer does not bundle a $pkg binary."
+                print_info "Next steps:"
+                print_info "  1. Confirm it is missing: opkg list-installed | grep $pkg"
+                print_info "  2. Search the GL feed: opkg update && opkg list | grep $pkg"
+                print_info "  3. If unavailable, obtain a compatible .ipk for this board/arch"
+                print_info "     or build $pkg from the SiFlower / OpenWrt 18.06 SDK."
+                print_info "  4. See docs/RESEARCH_SPEC.md §5.2–5.4 for platform constraints."
+                echo ""
+                die "Cannot continue without $pkg"
             fi
         fi
     done
@@ -217,7 +230,7 @@ configure_defaults() {
 
     # Set sensible defaults if not already configured
     uci -q get camofox.main.proxy_ip >/dev/null 2>&1 || uci set camofox.main.proxy_ip='172.20.10.1'
-    uci -q get camofox.main.proxy_port >/dev/null 2>&1 || uci set camofox.main.proxy_port='1080'
+    uci -q get camofox.main.proxy_port >/dev/null 2>&1 || uci set camofox.main.proxy_port='9876'
     uci -q get camofox.main.proxy_type >/dev/null 2>&1 || uci set camofox.main.proxy_type='socks5'
     uci -q get camofox.main.ttl_value >/dev/null 2>&1 || uci set camofox.main.ttl_value='65'
     uci -q get camofox.main.kill_switch >/dev/null 2>&1 || uci set camofox.main.kill_switch='1'

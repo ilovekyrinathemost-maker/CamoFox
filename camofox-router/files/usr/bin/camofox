@@ -34,7 +34,7 @@ load_config() {
     config_load camofox
     config_get ENABLED        main enabled          '0'
     config_get PROXY_IP       main proxy_ip         '172.20.10.1'
-    config_get PROXY_PORT     main proxy_port       '1080'
+    config_get PROXY_PORT     main proxy_port       '9876'
     config_get HTTP_PORT      main http_proxy_port  '1081'
     config_get PROXY_TYPE     main proxy_type       'socks5'
     config_get CONN_MODE      main connection_mode  'usb'

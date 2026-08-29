@@ -166,10 +166,10 @@ echo ""
 printf "${BOLD}${CYAN}━━━ Step 3/6: SOCKS5 Proxy ━━━${RESET}\n\n"
 
 print_info "The iPhone must be running iOS-SOCKS-Server via Pythonista."
-print_info "Default ports: SOCKS5=1080, HTTP=1081"
+print_info "Default ports: SOCKS5=9876 (CamoFox iOS), HTTP=1081"
 echo ""
 
-PROXY_PORT=$(ask "SOCKS5 proxy port" "1080")
+PROXY_PORT=$(ask "SOCKS5 proxy port" "9876")
 PROXY_TYPE=$(ask "Proxy type (socks5/http)" "socks5")
 
 echo ""
